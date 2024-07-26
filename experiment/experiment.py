@@ -1,9 +1,5 @@
 import numpy as np
-import scipy
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from tqdm import trange
 import os
 import argparse
 import bridgestan as bs
@@ -12,10 +8,8 @@ from scipy.stats import qmc
 from scipy.special import ndtri
 from scipy.optimize import minimize
 
-import optax
-
-from experiment.polynomial.targets import BayesianLogisticRegression, Gaussian
 from qmc_flow.nf_model import TransportMap
+
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
 MODEL_LIST = [
@@ -36,7 +30,6 @@ MODEL_LIST = [
     # 'pkpd',
 ]
 
-
 class stan_target:
     def __init__(self, stan_path, data_path):
         self.stan_model = bs.StanModel(stan_path, data_path)
@@ -56,11 +49,6 @@ class stan_target:
         if x.ndim == 1:
             return self.stan_model.param_constrain(x)
         return np.array([self.stan_model.param_constrain(x[i]) for i in range(x.shape[0])])
-
-
-name = "arK"
-stan = f"qmc_flow/stan_models/{name}.stan"
-data = f"qmc_flow/stan_models/{name}.json"
 
 def stan_sampler(stan, data):
     model = csp.CmdStanModel(stan_file=stan)
@@ -91,189 +79,74 @@ def get_moments(samples, weights=None):
 def get_effective_sample_size(weights):
     return np.sum(weights)**2 / np.sum(weights**2)
 
-# draws = stan_sampler(stan, data)
+def get_mse(true_moments, est_moments):
+    mse_1 = np.mean((true_moments[0] - est_moments[0])**2)
+    mse_2 = np.mean((true_moments[1] - est_moments[1])**2)
+    return mse_1, mse_2
 
-# sns.pairplot(pd.DataFrame(draws))
-# plt.show()
+def run_experiment(name, max_deg, nsample, method, max_iter, seed, savepath):
+    stan = f"qmc_flow/stan_models/{name}.stan"
+    data = f"qmc_flow/stan_models/{name}.json"
+    
+    # stan draws
+    stan_draws = stan_sampler(stan, data)
 
-# get_moments(draws)
+    # train normalizing flow
+    target = stan_target(stan, data)    
+    d = target.d
+    nf = TransportMap(d, target, max_deg=max_deg)
+    params = nf.init_params()
+    if method == 'rqmc':
+        soboleng = qmc.Sobol(d, scramble=True, seed=seed)
+        X = ndtri(soboleng.random(nsample) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
+    elif method == 'mc':    
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((nsample, d))
 
-max_deg = 2
-target = stan_target(stan, data)
-d = target.d
-nf = TransportMap(d, target, max_deg=max_deg)
-params = nf.init_params()
+    losses = []
+    def callback(params):
+        loss = nf.reverse_kl(params, X)
+        losses.append(loss)
+        print(f"Iteration: {len(losses)}, Loss: {loss}")
+    res = minimize(nf.reverse_kl, jac=nf.reverse_kl_grad, x0=params, args=X, method='L-BFGS-B', options={'maxiter': max_iter}, callback=callback)  
 
-optimizer = optax.adam(learning_rate=0.1)
-# optimizer = optax.lbfgs(learning_rate=0.1, linesearch=None)
-opt_state = optimizer.init(params)
+    if res.success:
+        print("Optimization successful")
 
+    params = res.x
+    Z_nf, log_det = nf.forward_and_logdet(params, X)
+    log_q = -0.5 * np.sum(X**2, axis=-1) - 0.5 * d * np.log(2 * np.pi)
+    proposal_log_densities = log_q - log_det
+    target_log_densities = target.log_prob(np.array(Z_nf, float))
+    log_weights = target_log_densities - proposal_log_densities
+    log_weights -= np.max(log_weights)
+    weights = np.exp(log_weights)
+    nf_samples = target.param_constrain(np.array(Z_nf, float))
 
-soboleng = qmc.Sobol(d, scramble=True, seed=1)
-X = ndtri(soboleng.random(2**10) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-losses = []
-for t in range(500):
-    grad = nf.reverse_kl_grad(params, X)
-    updates, opt_state = optimizer.update(grad, opt_state, params)
-    params = optax.apply_updates(params, updates)
-    losses.append(nf.reverse_kl(params, X).item())
-    if t % 10 == 0:
-        print(t, losses[-1])
-
-optimizer = optax.lbfgs()
-params = nf.init_params()
-opt_state = optimizer.init(params)
-loss = nf.reverse_kl(params, X)
-grad = nf.reverse_kl_grad(params, X)
-updates, opt_state = optimizer.update(grad, opt_state, params, value=loss, grad=grad, value_fn=lambda params: nf.reverse_kl(params, X))
-
-# target.stan_model.log_density(np.random.randn(d))
-
-# nf.reverse_kl(params, np.random.randn(2**10, d))
-# np.linalg.norm(nf.reverse_kl_grad(params, np.random.randn(2**10, d)))
-
-params_gd, losses = nf.gradient_descent(max_iter=1000, lr=1e-3, nsample=2**8, seed=2, print_every=10)
-
-soboleng = qmc.Sobol(d, scramble=True, seed=1)
-x = ndtri(soboleng.random(2**10) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-
-losses = []
-def callback(params):
-    loss = nf.reverse_kl(params, x)
-    losses.append(loss)
-    print(f"Iteration: {len(losses)}, Loss: {loss}")
-
-res = minimize(nf.reverse_kl, jac=nf.reverse_kl_grad, x0=nf.init_params(), args=x, method='L-BFGS-B', options={'maxiter': 500}, callback=callback)  
-
-if res.success:
-    print("Optimization successful")
-
-nf_samples, weights = nf.sample(2**14, res.x, constrained=True, seed=1, rqmc=True, return_weights=True)
-get_effective_sample_size(weights)
-get_moments(nf_samples, weights)[0] 
-get_moments(draw)[0]
-
-
-
-X = np.random.randn(50000, d)
-Z_nf, log_det = nf.forward_and_logdet(res.x, X) 
-log_q = -0.5 * np.sum(X**2, axis=-1) - 0.5 * d * np.log(2 * np.pi)
-proposal_log_densities = log_q - log_det
-target_log_densities = target.log_prob(np.array(Z_nf, float))
-log_weights = target_log_densities - proposal_log_densities
-log_weights -= np.max(log_weights)
-weights = np.exp(log_weights)   
-np.sum(nf_samples * weights[:, None], axis=0) / np.sum(weights) 
-
-# effective sample size
-np.sum(weights)**2 / np.sum(weights**2)
-np.mean(weights)**2 / np.mean(weights**2)
-
-
-
-res
-nf.reverse_kl(res.x, x)
-nf.reverse_kl_grad(res.x, x)
-
-params_ = res.x 
-nf.unpack_params(params_)[1]
-
-X = np.random.randn(50000, d)
-Z_nf, log_det = nf.forward_and_logdet(params_, X) 
-log_q = -0.5 * np.sum(X**2, axis=-1) - 0.5 * d * np.log(2 * np.pi)
-proposal_log_densities = log_q - log_det
-target_log_densities = np.array([target.log_prob(np.array(Z_nf[i], float)) for i in range(Z_nf.shape[0])])
-log_weights = target_log_densities - proposal_log_densities
-log_weights -= np.max(log_weights)
-weights = np.exp(log_weights)   
-np.sum(weights)**2 / np.sum(weights**2)
-np.sum(Z_nf * weights[:, None], axis=0) / np.sum(weights)
-
-# unconstrained samples Z_nf
-target.stan_model.param_constrain(np.array(Z_nf, float)[0])
-
-
-plt.hist(theta_draws[:, 6], 50)
-plt.hist(np.exp(Z_nf[:, 6]), 50, alpha=0.5)
-plt.show()
-
-def run_simu(max_iter, nsample, seed, rqmc):
-    d = 4
-    N = 20
-    rho = 0.9
-    rng = np.random.default_rng(0)
-    data = {}
-    data['X']= rng.standard_normal((N, d)) @ np.linalg.cholesky(scipy.linalg.toeplitz(rho ** np.arange(d))).T
-    data['beta'] = rng.standard_normal(d)
-    data['y'] = rng.binomial(1, scipy.special.expit(data['X'] @ data['beta']))
-    target = BayesianLogisticRegression(data['X'], data['y'], prior_scale=1.)
-    ############################################################
-    # Laplace approximation
-    ############################################################
-    def obj(mu):
-        return np.sum(np.log(1 + np.exp(-(data['X'] @ mu) * data['y'])))  + mu.dot(mu) / 2
-    res = minimize(obj, np.zeros(d))
-    lap_shift = res.x
-
-    def simu_lap(Z, shift):
-        Z_shift = Z + shift
-        log_weight = target.log_prob(Z_shift) - (-.5 * np.sum(Z**2, 1) - .5 * d * np.log(2 * np.pi))
-        weight = np.exp(log_weight)
-        normalizing_const = np.mean(weight)
-        est_mean = np.mean(Z_shift * weight[:, None], 0) / normalizing_const
-        est_var = np.mean(Z_shift**2 * weight[:, None], 0) / normalizing_const
-        return normalizing_const, est_mean, est_var
-
-    rng = np.random.default_rng(2024)
-    nrep = 100
-    nsample = 2**16
-    est_consts = []
-    est_means = []
-    est_vars = []
-    soboleng = qmc.Sobol(d, scramble=True, seed=rng)
-    for i in range(nrep):
-        Z = ndtri(soboleng.random(nsample) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-        est_nc, est_mean, est_var = simu_lap(Z, lap_shift)
-        est_consts.append(est_nc)
-        est_means.append(est_mean)
-        est_vars.append(est_var)
-
-    true_mean = np.mean(np.array(est_means), 0)
-    true_nc = np.mean(est_consts)
-    true_var = np.mean(np.array(est_vars), 0)
-
-    ############################################################
-    # Normalizing flow
-    ############################################################
-    max_deg = 3
-    nf = Copula_NF(d, target, max_deg)
-    nf.init_params()
-    nf.true_mean = true_mean
-    nf.true_var = true_var
-
-    nf.init_params()
-    Z_nf, weights, losses, evals = nf._optimize_eval(max_iter=max_iter, rqmc=rqmc, nsample=nsample, seed=seed)
-    return np.array(evals)
+    ess = get_effective_sample_size(weights)
+    moments = get_moments(nf_samples, weights)
+    true_moments = get_moments(stan_draws)
+    mse_1, mse_2 = get_mse(true_moments, moments)
+    results = {'ESS': ess, 'MSE_1': mse_1, 'MSE_2': mse_2}
+    savepath = os.path.join(savepath, f'{name}_{method}_n_{nsample}_deg_{max_deg}_iter_{max_iter}_{seed}.csv')
+    pd.DataFrame(results, index=[0]).to_csv(savepath, index=False)
+    print('saved to', savepath)
 
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--date', type=str, default='2024-07-26')
-    argparser.add_argument('--model_name', type=str, default='normal')
-    argparser.add_argument('--max_iter', type=int, default=10)
-    argparser.add_argument('--m', type=int, default=6)
+    argparser.add_argument('--model_name', type=str, default='arK')
+    argparser.add_argument('--max_iter', type=int, default=100)
+    argparser.add_argument('--max_deg', type=int, default=3)
+    argparser.add_argument('--m', type=int, default=10)
     argparser.add_argument('--seed', type=int, default=0)
     argparser.add_argument('--method', type=str, default='mc')
-    argparser.add_argument('--rootdir', type=str, default='experiment/copula/results')
+    argparser.add_argument('--rootdir', type=str, default='experiment/results')
     args = argparser.parse_args()
 
     nsample = 2**args.m
-    rqmc = args.method == 'rqmc'
-    evals = run_simu(args.max_iter, nsample, args.seed, rqmc=rqmc)
+    savepath = os.path.join(args.rootdir, args.date)
+    os.makedirs(savepath, exist_ok=True)
 
-    path = os.path.join(args.rootdir, args.date)
-    os.makedirs(path, exist_ok=True)
-    filename = f'{args.model_name}_{args.method}_{nsample}_{args.seed}.csv'
-    path = os.path.join(path, filename)
-    pd.DataFrame(evals).to_csv(path, index=False)
-
+    run_experiment(args.model_name, args.max_deg, nsample, args.method, args.max_iter, args.seed, savepath)
