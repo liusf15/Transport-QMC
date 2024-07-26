@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import os
 import argparse
+import pickle
 import bridgestan as bs
 import cmdstanpy as csp
 from scipy.stats import qmc
@@ -127,9 +128,11 @@ def run_experiment(name, max_deg, nsample, method, max_iter, seed, savepath):
     moments = get_moments(nf_samples, weights)
     true_moments = get_moments(stan_draws)
     mse_1, mse_2 = get_mse(true_moments, moments)
-    results = {'ESS': ess, 'MSE_1': mse_1, 'MSE_2': mse_2}
-    savepath = os.path.join(savepath, f'{name}_{method}_n_{nsample}_deg_{max_deg}_iter_{max_iter}_{seed}.csv')
-    pd.DataFrame(results, index=[0]).to_csv(savepath, index=False)
+    results = {'ESS': ess, 'MSE_1': mse_1, 'MSE_2': mse_2, 'losses': losses, 'optimization': res}
+    savepath = os.path.join(savepath, f'{name}_{method}_n_{nsample}_deg_{max_deg}_iter_{max_iter}_{seed}.pkl')
+    with open(savepath, 'wb') as f:
+        pickle.dump(results, f)
+    # pd.DataFrame(results, index=[0]).to_csv(savepath, index=False)
     print('saved to', savepath)
 
 
