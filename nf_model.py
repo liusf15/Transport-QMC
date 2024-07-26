@@ -196,7 +196,7 @@ class TransportMap():
 
     def optimize(self, max_iter=50, lr=None, nsample=2**10, seed=0):
         optimizer = optax.lbfgs(learning_rate=lr)
-        params = self.pack_params()
+        params = self.init_params()
         opt_state = optimizer.init(params)
 
         # @jax.jit
