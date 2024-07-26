@@ -152,7 +152,8 @@ class TransportMap():
         """
         log_q = -0.5 * jnp.sum(x**2, axis=-1) - 0.5 * self.d * jnp.log(2 * jnp.pi)
         z, log_det = self.forward_and_logdet(params, x)
-        log_p = jnp.array([self.target.log_prob(np.array(z[i], dtype=float)) for i in range(z.shape[0])])
+        # log_p = jnp.array([self.target.log_prob(np.array(z[i], dtype=float)) for i in range(z.shape[0])])
+        log_p = jnp.array(self.target.log_prob(np.array(z, dtype=float)))
         return jnp.mean(log_q - log_det - log_p)
     
     def _log_p_grad(self, params, x):
@@ -161,8 +162,9 @@ class TransportMap():
         """
         z = self.forward(params, x) # TODO: use vectorized version
         T_grad = jax.jacfwd(self.forward)(params, x)
-        target_log_p = jnp.array([self.target.log_prob_grad(np.array(z[i], dtype=float)) for i in range(z.shape[0])])
-        return jnp.einsum('ijk,ij->k', T_grad, target_log_p) / z.shape[0]
+        # target_log_p = jnp.array([self.target.log_prob_grad(np.array(z[i], dtype=float)) for i in range(z.shape[0])])
+        log_p_grad = jnp.array(self.target.log_prob_grad(np.array(z, dtype=float)))
+        return jnp.einsum('ijk,ij->k', T_grad, log_p_grad) / z.shape[0]
 
     def reverse_kl_grad(self, params, x):
         def logdet_mean(params, x):
@@ -174,19 +176,6 @@ class TransportMap():
         log_p_grad = self._log_p_grad(params, x)
         return -log_det_grad - log_p_grad
     
-    def debug(self):
-        self.init_params()
-        params = self.pack_params()
-        rng = np.random.default_rng(0)  
-        x = jnp.array(rng.standard_normal((50, self.d)))
-
-        self.forward(params, x[0])
-        self.forward_and_logdet(params, x)
-        self.reverse_kl(params, x)
-        
-        self._log_p_grad(params, x[0])
-        self.reverse_kl_grad(params, x)
-    
     def gradient_descent(self, max_iter=50, lr=1e-2, nsample=2**10, seed=0, print_every=100):
         params = self.init_params()
         losses = []
@@ -195,12 +184,12 @@ class TransportMap():
         X = ndtri(soboleng.random(nsample) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
         for t in range(max_iter):
             loss = self.reverse_kl(params, X)
-            grad = self.reverse_kl_grad(params, X)
+            grad = self.reverse_kl_grad(params, X) # redundant computation
             params = params - lr * grad
             losses.append(loss.item())
             if t % print_every == 0:
                 print(f"Iteration {t}, Loss {loss.item()}")
-            if np.linalg.norm(lr * grad) < 1e-6:
+            if np.linalg.norm(lr * grad) < 1e-3:
                 print("Converged")
                 break
         return params, losses
@@ -273,7 +262,7 @@ class TransportMap():
         return Z_nf, weights, losses, evals
     
 
-    def sample(self, n, seed=0, rqmc=True, return_weights=False):
+    def sample(self, n, params, constrained=True, seed=0, rqmc=True, return_weights=False):
         """
         seed: either integer seed or a numpy random generator
         """
@@ -283,13 +272,18 @@ class TransportMap():
         else:
             soboleng = qmc.Sobol(self.d, scramble=True, seed=seed)
             X = ndtri(soboleng.random(n) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-        Z_nf, log_det = self.forward_and_logdet(X)
+        Z_nf, log_det = self.forward_and_logdet(params, X)
         if not return_weights:
-            return Z_nf
+            if constrained:
+                return self.target.param_constrain(np.array(Z_nf, float))
         log_q = -0.5 * jnp.sum(X**2, axis=-1) - 0.5 * self.d * jnp.log(2 * jnp.pi)
         proposal_log_densities = log_q - log_det
-        target_log_densities = self.target.log_prob(Z_nf)
-        weights = np.exp(target_log_densities - proposal_log_densities)
+        target_log_densities = self.target.log_prob(np.array(Z_nf, float))
+        log_weights = target_log_densities - proposal_log_densities
+        log_weights -= np.max(log_weights)
+        weights = np.exp(log_weights)
+        if constrained:
+            Z_nf = self.target.param_constrain(np.array(Z_nf, float))
         return Z_nf, weights
 
 

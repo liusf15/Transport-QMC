@@ -17,13 +17,23 @@ from experiment.polynomial.targets import BayesianLogisticRegression, Gaussian
 from qmc_flow.nf_model import TransportMap
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
-# TODO: change the parametrization of matrix L
-# play with the degree
-# try a lower dimensional example
-
-# d = 2
-# mean = np.zeros(d)
-# cov = np.eye(d)
+MODEL_LIST = [
+    "normal",
+    "corr-normal",
+    # "rosenbrock",
+    # "glmm-poisson",
+    "hmm",
+    "garch",
+    # "lotka-volterra",
+    # 'irt-2pl',
+    # 'eight-schools',
+    # 'normal-mixture',
+    # 'arma',
+    'arK',
+    # 'prophet',
+    # 'covid19-impperial-v2',
+    # 'pkpd',
+]
 
 
 class stan_target:
@@ -32,86 +42,105 @@ class stan_target:
         self.d = self.stan_model.param_unc_num()
     
     def log_prob(self, x):
-        return self.stan_model.log_density(x)
+        if x.ndim == 1:
+            return self.stan_model.log_density(x)
+        return np.array([self.stan_model.log_density(x[i]) for i in range(x.shape[0])])
     
     def log_prob_grad(self, x):
-        return self.stan_model.log_density_gradient(x)[1]
+        if x.ndim == 1:
+            return self.stan_model.log_density_gradient(x)[1]
+        return np.array([self.stan_model.log_density_gradient(x[i])[1] for i in range(x.shape[0])])
+    
+    def param_constrain(self, x):
+        if x.ndim == 1:
+            return self.stan_model.param_constrain(x)
+        return np.array([self.stan_model.param_constrain(x[i]) for i in range(x.shape[0])])
 
 
-name = 'corr-normal'
-name = 'arK'
+name = "garch"
 stan = f"qmc_flow/stan_models/{name}.stan"
 data = f"qmc_flow/stan_models/{name}.json"
 
-
-def metadata_columns(fit):
-    """Return the number of metadata columns in CmdStanPy's output."""
-    return len(fit.metadata.method_vars.keys())
-
-# 
-model = csp.CmdStanModel(stan_file=stan)
-fit = model.sample(
-    data=data,
-    seed=1,
-    metric="unit_e",
-    show_console=False,
-    adapt_delta=0.9,
-    chains=1,
-    parallel_chains=2,
-    iter_warmup=25_000,
-    iter_sampling=50_000,
-    show_progress=False,
-)
-
-theta_draws = fit.draws(concat_chains=True)[:, metadata_columns(fit):]
-# # sns.pairplot(pd.DataFrame(theta_draws))
-# # plt.scatter(theta_draws[:, 0], theta_draws[:, 2])
-
-theta_mean = theta_draws.mean(axis=0)
-# theta_sd = theta_draws.std(axis=0)
-# theta_sq_mean = (theta_draws**2).mean(axis=0)
-# theta_sq_sd = (theta_draws**2).std(axis=0)
-
-# plt.hist(theta_draws[:, -1], 50)
-
-# # bs.compile_model(stan)
-# model_bs = bs.StanModel(stan, data)
-# model_bs.param_unc_names()
+def stan_sampler(stan, data):
+    model = csp.CmdStanModel(stan_file=stan)
+    fit = model.sample(
+        data=data,
+        seed=1,
+        metric="unit_e",
+        show_console=False,
+        adapt_delta=0.9,
+        chains=1,
+        parallel_chains=2,
+        iter_warmup=25_000,
+        iter_sampling=50_000,
+        show_progress=True,
+    )
+    meta_columns = len(fit.metadata.method_vars.keys())
+    return fit.draws(concat_chains=True)[:, meta_columns:]
 
 
+draws = stan_sampler(stan, data)
+
+# sns.pairplot(pd.DataFrame(draws))
+# plt.show()
+
+def get_moments(samples, weights=None):
+    if weights is None:
+        weights = np.ones(samples.shape[0]) / samples.shape[0]
+    else:
+        weights = weights / np.sum(weights)
+    moment_1 = np.sum(samples * weights[:, None], axis=0)
+    moment_2 = np.sum(samples**2 * weights[:, None], axis=0)
+    return moment_1, moment_2
+
+def get_effective_sample_size(weights):
+    return np.sum(weights)**2 / np.sum(weights**2)
+
+get_moments(draws)
+
+max_deg = 1
 target = stan_target(stan, data)
 d = target.d
-
-nf = TransportMap(d, target, max_deg=1)
+nf = TransportMap(d, target, max_deg=max_deg)
 params = nf.init_params()
 
+target.stan_model.log_density(np.random.randn(d))
 
-params_gd, losses = nf.gradient_descent(max_iter=1000, lr=1e-2, nsample=2**8, seed=0, print_every=10)
+nf.reverse_kl(params, np.random.randn(2**10, d))
+# np.linalg.norm(nf.reverse_kl_grad(params, np.random.randn(2**10, d)))
+
+params_gd, losses = nf.gradient_descent(max_iter=1000, lr=1e-3, nsample=2**8, seed=2, print_every=10)
+
+soboleng = qmc.Sobol(d, scramble=True, seed=1)
+x = ndtri(soboleng.random(2**10) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
+res = minimize(nf.reverse_kl, jac=nf.reverse_kl_grad, x0=params, args=x, method='L-BFGS-B', options={'maxiter': 500})  
+
+if res.success:
+    print("Optimization successful")
+
+nf_samples, weights = nf.sample(2**14, params_gd, constrained=True, seed=1, rqmc=True, return_weights=True)
+get_effective_sample_size(weights)
+get_moments(nf_samples, weights)[0] 
+get_moments(draws)[0]
+
+
 
 X = np.random.randn(50000, d)
-Z_nf, log_det = nf.forward_and_logdet(params_gd, X) 
+Z_nf, log_det = nf.forward_and_logdet(res.x, X) 
 log_q = -0.5 * np.sum(X**2, axis=-1) - 0.5 * d * np.log(2 * np.pi)
 proposal_log_densities = log_q - log_det
-target_log_densities = np.array([target.log_prob(np.array(Z_nf[i], float)) for i in range(Z_nf.shape[0])])
+target_log_densities = target.log_prob(np.array(Z_nf, float))
 log_weights = target_log_densities - proposal_log_densities
 log_weights -= np.max(log_weights)
 weights = np.exp(log_weights)   
-np.sum(Z_nf * weights[:, None], axis=0) / np.sum(weights) 
-
-
-plt.scatter(Z_nf[:, 0], Z_nf[:, 1])
-plt.show()
+np.sum(nf_samples * weights[:, None], axis=0) / np.sum(weights) 
 
 # effective sample size
 np.sum(weights)**2 / np.sum(weights**2)
 np.mean(weights)**2 / np.mean(weights**2)
 
 
-soboleng = qmc.Sobol(d, scramble=True, seed=1)
-x = ndtri(soboleng.random(2**10) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-# nf.reverse_kl(params, x)
 
-res = minimize(nf.reverse_kl, jac=nf.reverse_kl_grad, x0=params, args=x, method='L-BFGS-B', options={'maxiter': 500})  
 res
 nf.reverse_kl(res.x, x)
 nf.reverse_kl_grad(res.x, x)
