@@ -11,7 +11,8 @@ import cmdstanpy as csp
 from scipy.stats import qmc
 from scipy.special import ndtri
 from scipy.optimize import minimize
-import jax
+
+import optax
 
 from experiment.polynomial.targets import BayesianLogisticRegression, Gaussian
 from qmc_flow.nf_model import TransportMap
@@ -57,7 +58,7 @@ class stan_target:
         return np.array([self.stan_model.param_constrain(x[i]) for i in range(x.shape[0])])
 
 
-name = "garch"
+name = "arK"
 stan = f"qmc_flow/stan_models/{name}.stan"
 data = f"qmc_flow/stan_models/{name}.json"
 
@@ -78,12 +79,6 @@ def stan_sampler(stan, data):
     meta_columns = len(fit.metadata.method_vars.keys())
     return fit.draws(concat_chains=True)[:, meta_columns:]
 
-
-draws = stan_sampler(stan, data)
-
-# sns.pairplot(pd.DataFrame(draws))
-# plt.show()
-
 def get_moments(samples, weights=None):
     if weights is None:
         weights = np.ones(samples.shape[0]) / samples.shape[0]
@@ -96,32 +91,67 @@ def get_moments(samples, weights=None):
 def get_effective_sample_size(weights):
     return np.sum(weights)**2 / np.sum(weights**2)
 
-get_moments(draws)
+# draws = stan_sampler(stan, data)
 
-max_deg = 1
+# sns.pairplot(pd.DataFrame(draws))
+# plt.show()
+
+# get_moments(draws)
+
+max_deg = 2
 target = stan_target(stan, data)
 d = target.d
 nf = TransportMap(d, target, max_deg=max_deg)
 params = nf.init_params()
 
-target.stan_model.log_density(np.random.randn(d))
+optimizer = optax.adam(learning_rate=0.1)
+# optimizer = optax.lbfgs(learning_rate=0.1, linesearch=None)
+opt_state = optimizer.init(params)
 
-nf.reverse_kl(params, np.random.randn(2**10, d))
+
+soboleng = qmc.Sobol(d, scramble=True, seed=1)
+X = ndtri(soboleng.random(2**10) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
+losses = []
+for t in range(500):
+    grad = nf.reverse_kl_grad(params, X)
+    updates, opt_state = optimizer.update(grad, opt_state, params)
+    params = optax.apply_updates(params, updates)
+    losses.append(nf.reverse_kl(params, X).item())
+    if t % 10 == 0:
+        print(t, losses[-1])
+
+optimizer = optax.lbfgs()
+params = nf.init_params()
+opt_state = optimizer.init(params)
+loss = nf.reverse_kl(params, X)
+grad = nf.reverse_kl_grad(params, X)
+updates, opt_state = optimizer.update(grad, opt_state, params, value=loss, grad=grad, value_fn=lambda params: nf.reverse_kl(params, X))
+
+# target.stan_model.log_density(np.random.randn(d))
+
+# nf.reverse_kl(params, np.random.randn(2**10, d))
 # np.linalg.norm(nf.reverse_kl_grad(params, np.random.randn(2**10, d)))
 
 params_gd, losses = nf.gradient_descent(max_iter=1000, lr=1e-3, nsample=2**8, seed=2, print_every=10)
 
 soboleng = qmc.Sobol(d, scramble=True, seed=1)
 x = ndtri(soboleng.random(2**10) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-res = minimize(nf.reverse_kl, jac=nf.reverse_kl_grad, x0=params, args=x, method='L-BFGS-B', options={'maxiter': 500})  
+
+losses = []
+def callback(params):
+    loss = nf.reverse_kl(params, x)
+    losses.append(loss)
+    print(f"Iteration: {len(losses)}, Loss: {loss}")
+
+res = minimize(nf.reverse_kl, jac=nf.reverse_kl_grad, x0=nf.init_params(), args=x, method='L-BFGS-B', options={'maxiter': 500}, callback=callback)  
 
 if res.success:
     print("Optimization successful")
 
-nf_samples, weights = nf.sample(2**14, params_gd, constrained=True, seed=1, rqmc=True, return_weights=True)
+nf_samples, weights = nf.sample(2**14, res.x, constrained=True, seed=1, rqmc=True, return_weights=True)
 get_effective_sample_size(weights)
 get_moments(nf_samples, weights)[0] 
-get_moments(draws)[0]
+get_moments(draw)[0]
 
 
 
@@ -228,7 +258,8 @@ def run_simu(max_iter, nsample, seed, rqmc):
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
-    argparser.add_argument('--date', type=str, default='2024-07-23')
+    argparser.add_argument('--date', type=str, default='2024-07-26')
+    argparser.add_argument('--model_name', type=str, default='normal')
     argparser.add_argument('--max_iter', type=int, default=10)
     argparser.add_argument('--m', type=int, default=6)
     argparser.add_argument('--seed', type=int, default=0)
@@ -242,32 +273,7 @@ if __name__ == '__main__':
 
     path = os.path.join(args.rootdir, args.date)
     os.makedirs(path, exist_ok=True)
-    filename = f'logistic_{args.method}_{nsample}_{args.seed}.csv'
+    filename = f'{args.model_name}_{args.method}_{nsample}_{args.seed}.csv'
     path = os.path.join(path, filename)
     pd.DataFrame(evals).to_csv(path, index=False)
 
-# errors_1 = {}
-# errors_2 = {}
-# for seed in range(10):
-#     for m in [6, 8, 10, 12]:
-#         nsample = 2**m
-#         print(seed, nsample)
-#         nf.init_params()
-#         Z_nf, weights, losses, evals = nf._optimize_eval(max_iter=10, rqmc=False, nsample=nsample, seed=seed)
-#         errors_1[(seed, m, 'mc')] = np.array(evals)[:, 0]
-#         errors_2[(seed, m, 'mc')] = np.array(evals)[:, 1]
-
-#         nf.init_params()
-#         Z_nf, weights, losses, evals = nf._optimize_eval(max_iter=10, rqmc=True, nsample=nsample, seed=seed)
-#         errors_1[(seed, m, 'rqmc')] = np.array(evals)[:, 0]
-#         errors_2[(seed, m, 'rqmc')] = np.array(evals)[:, 1]
-
-# df = pd.DataFrame(errors_1).T
-# df.reset_index(names=['seed', 'm', 'method'], inplace=True)
-# df = df.melt(id_vars=['seed', 'm', 'method'], var_name='iter', value_name='error')
-
-# fig, ax = plt.subplots(1, 2, figsize=(10, 5), sharey=True, sharex=True)
-# sns.pointplot(ax=ax[0], data=df.loc[df['method'] == 'mc'], x='iter', y='error', hue='m')
-# sns.pointplot(ax=ax[1], data=df.loc[df['method'] == 'rqmc'], x='iter', y='error', hue='m')
-# plt.yscale('log')
-# plt.show()
