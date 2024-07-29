@@ -14,7 +14,7 @@ from qmc_flow.nf_model import TransportMap
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
 MODEL_LIST = [
-    "normal",
+    # "normal",
     "corr-normal",
     # "rosenbrock",
     # "glmm-poisson",
@@ -85,12 +85,25 @@ def get_mse(true_moments, est_moments):
     mse_2 = np.mean((true_moments[1] - est_moments[1])**2)
     return mse_1, mse_2
 
+def get_reference_moments(name):
+    if name == 'corr-normal':
+        return np.zeros(50), np.ones(50)
+    
+    moment_filename = f'qmc_flow/stan_models/{name}_moments.csv'
+    if os.path.exists(moment_filename):
+        moments = pd.read_csv(moment_filename)
+        return moments['moment_1'].values, moments['moment_2'].values
+    
+    stan = f"qmc_flow/stan_models/{name}.stan"
+    data = f"qmc_flow/stan_models/{name}.json"
+    stan_draws = stan_sampler(stan, data)
+    moment_1, moment_2 = get_moments(stan_draws)
+    pd.DataFrame({'moment_1': moment_1, 'moment_2': moment_2}).to_csv(moment_filename, index=False)
+
+
 def run_experiment(name, max_deg, nsample, method, max_iter, seed, savepath):
     stan = f"qmc_flow/stan_models/{name}.stan"
     data = f"qmc_flow/stan_models/{name}.json"
-    
-    # stan draws
-    stan_draws = stan_sampler(stan, data)
 
     # train normalizing flow
     target = stan_target(stan, data)    
@@ -103,32 +116,56 @@ def run_experiment(name, max_deg, nsample, method, max_iter, seed, savepath):
     elif method == 'mc':    
         rng = np.random.default_rng(seed)
         X = rng.standard_normal((nsample, d))
+    log_q = -0.5 * np.sum(X**2, axis=-1) - 0.5 * d * np.log(2 * np.pi)
 
-    losses = []
+    kl_logs = []
+    moments_logs = []
+    ess_logs = []
+    state = {'counter': 0}
+    print_every = 1
     def callback(params):
+        state['counter'] += 1
         loss = nf.reverse_kl(params, X)
-        losses.append(loss)
-        print(f"Iteration: {len(losses)}, Loss: {loss}")
-    res = minimize(nf.reverse_kl, jac=nf.reverse_kl_grad, x0=params, args=X, method='L-BFGS-B', options={'maxiter': max_iter}, callback=callback)  
+        kl_logs.append(loss.item())
+        Z_nf, log_det = nf.forward_and_logdet(params, X)      
+        proposal_log_densities = log_q - log_det
+        target_log_densities = target.log_prob(np.array(Z_nf, float))
+        log_weights = target_log_densities - proposal_log_densities
+        log_weights -= np.max(log_weights)
+        weights = np.exp(log_weights)
+        nf_samples = target.param_constrain(np.array(Z_nf, float))
+        moments = get_moments(nf_samples, weights)
+        moments_logs.append(moments)
+        ess = get_effective_sample_size(weights)
+        ess_logs.append(ess.item())
+        if state['counter'] % print_every == 0:
+            print(f"Iteration: {state['counter']}, Loss: {loss}, ESS: {ess}")
+        if ess >= 0.99 * nsample:
+            print(f"ESS is {ess}, stopping optimization")
+            raise StopIteration
+        
 
-    if res.success:
-        print("Optimization successful")
+    try:
+        res = minimize(nf.reverse_kl, jac=nf.reverse_kl_grad, x0=params, args=X, method='L-BFGS-B', options={'maxiter': max_iter}, callback=callback)  
+        if res.success:
+            print("Optimization successful")
+    except StopIteration:
+        print("Optimization was terminated by the callback function")
 
     params = res.x
-    Z_nf, log_det = nf.forward_and_logdet(params, X)
-    log_q = -0.5 * np.sum(X**2, axis=-1) - 0.5 * d * np.log(2 * np.pi)
-    proposal_log_densities = log_q - log_det
-    target_log_densities = target.log_prob(np.array(Z_nf, float))
-    log_weights = target_log_densities - proposal_log_densities
-    log_weights -= np.max(log_weights)
-    weights = np.exp(log_weights)
-    nf_samples = target.param_constrain(np.array(Z_nf, float))
-
-    ess = get_effective_sample_size(weights)
-    moments = get_moments(nf_samples, weights)
-    true_moments = get_moments(stan_draws)
-    mse_1, mse_2 = get_mse(true_moments, moments)
-    results = {'ESS': ess, 'MSE_1': mse_1, 'MSE_2': mse_2, 'losses': losses, 'optimization': res}
+    # Z_nf, log_det = nf.forward_and_logdet(params, X)
+    # proposal_log_densities = log_q - log_det
+    # target_log_densities = target.log_prob(np.array(Z_nf, float))
+    # log_weights = target_log_densities - proposal_log_densities
+    # log_weights -= np.max(log_weights)
+    # weights = np.exp(log_weights)
+    # nf_samples = target.param_constrain(np.array(Z_nf, float))
+    # ess = get_effective_sample_size(weights)
+    # moments = get_moments(nf_samples, weights)
+    callback(params)
+    ref_moments = get_reference_moments(name)
+    # mse_1, mse_2 = get_mse(true_moments, moments)
+    results = {'ESS': ess_logs, 'moments': moments_logs, 'losses': kl_logs, 'optimization': res, 'ref_moments': ref_moments}
     savepath = os.path.join(savepath, f'{method}_n_{nsample}_deg_{max_deg}_iter_{max_iter}_{seed}.pkl')
     with open(savepath, 'wb') as f:
         pickle.dump(results, f)
