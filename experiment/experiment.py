@@ -99,6 +99,7 @@ def get_reference_moments(name):
     stan_draws = stan_sampler(stan, data)
     moment_1, moment_2 = get_moments(stan_draws)
     pd.DataFrame({'moment_1': moment_1, 'moment_2': moment_2}).to_csv(moment_filename, index=False)
+    return pd.DataFrame({'moment_1': moment_1, 'moment_2': moment_2})
 
 
 def run_experiment(name, max_deg, nsample, method, max_iter, seed, savepath):
