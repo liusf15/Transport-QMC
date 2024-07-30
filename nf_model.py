@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import qmc
+from scipy.optimize import minimize
+from scipy.optimize import fmin_l_bfgs_b
 from tqdm import trange
 
 import jax.numpy as jnp
@@ -12,8 +14,20 @@ from jax.scipy.linalg import det
 import jax
 import optax
 
-from experiment.polynomial.targets import Gaussian, LogNormal
+from qmc_flow.utils import sample_gaussian 
 MACHINE_EPSILON = np.finfo(np.float64).eps
+
+def get_moments(samples, weights=None):
+    if weights is None:
+        weights = np.ones(samples.shape[0]) / samples.shape[0]
+    else:
+        weights = weights / np.sum(weights)
+    moment_1 = np.sum(samples * weights[:, None], axis=0)
+    moment_2 = np.sum(samples**2 * weights[:, None], axis=0)
+    return moment_1, moment_2
+
+def get_effective_sample_size(weights):
+    return np.sum(weights)**2 / np.sum(weights**2)
 
 def bernstein_poly(x, deg, weights):
     return jnp.dot(betainc(jnp.arange(1, deg + 1), jnp.arange(deg, 0, -1), x), weights)
@@ -102,7 +116,8 @@ class TransportMap():
         mu, L, weights = self.unpack_params(params)
 
         t_x = mu + x @ L.T
-        log_det = jnp.log(det(L @ L.T)) / 2
+        # log_det = jnp.log(det(L @ L.T)) / 2
+        log_det = jnp.sum(params[self.d:self.d+self.d])
         
         if self.link_func[0] == 'ndtr':
             # use \Phi to map R to [0, 1]
@@ -151,30 +166,30 @@ class TransportMap():
         x: (num_samples, d)
         """
         log_q = -0.5 * jnp.sum(x**2, axis=-1) - 0.5 * self.d * jnp.log(2 * jnp.pi)
-        z, log_det = self.forward_and_logdet(params, x)
+        z, log_det = self.forward_and_logdet(params, x) # use vmap, faster?
         # log_p = jnp.array([self.target.log_prob(np.array(z[i], dtype=float)) for i in range(z.shape[0])])
-        log_p = jnp.array(self.target.log_prob(np.array(z, dtype=float)))
+        log_p = jax.vmap(self.target.log_prob)(z)
         return jnp.mean(log_q - log_det - log_p)
     
-    def _log_p_grad(self, params, x):
-        """
-        gradient of log p(T(x; params)) w.r.t. params
-        """
-        z = self.forward(params, x) # TODO: use vectorized version
-        T_grad = jax.jacfwd(self.forward)(params, x)
-        # target_log_p = jnp.array([self.target.log_prob_grad(np.array(z[i], dtype=float)) for i in range(z.shape[0])])
-        log_p_grad = jnp.array(self.target.log_prob_grad(np.array(z, dtype=float)))
-        return jnp.einsum('ijk,ij->k', T_grad, log_p_grad) / z.shape[0]
+    # def _log_p_grad(self, params, x):
+    #     """
+    #     gradient of log p(T(x; params)) w.r.t. params
+    #     """
+    #     z = self.forward(params, x) # TODO: use vectorized version
+    #     T_grad = jax.jacfwd(self.forward)(params, x)
+    #     # target_log_p = jnp.array([self.target.log_prob_grad(np.array(z[i], dtype=float)) for i in range(z.shape[0])])
+    #     log_p_grad = jnp.array(self.target.log_prob_grad(np.array(z, dtype=float)))
+    #     return jnp.einsum('ijk,ij->k', T_grad, log_p_grad) / z.shape[0]
 
-    def reverse_kl_grad(self, params, x):
-        def logdet_mean(params, x):
-            log_det = self.forward_and_logdet(params, x)[1]
-            return jnp.mean(log_det)
-        log_det_grad = jax.jacfwd(logdet_mean)(params, x)
+    # def reverse_kl_grad(self, params, x):
+    #     def logdet_mean(params, x):
+    #         log_det = self.forward_and_logdet(params, x)[1]
+    #         return jnp.mean(log_det)
+    #     log_det_grad = jax.jacfwd(logdet_mean)(params, x)
         
-        # log_p_grad = np.mean([self._log_p_grad(params, x[i]) for i in range(x.shape[0])], axis=0) #!! super slow
-        log_p_grad = self._log_p_grad(params, x)
-        return -log_det_grad - log_p_grad
+    #     # log_p_grad = np.mean([self._log_p_grad(params, x[i]) for i in range(x.shape[0])], axis=0) #!! super slow
+    #     log_p_grad = self._log_p_grad(params, x)
+    #     return -log_det_grad - log_p_grad
     
     def gradient_descent(self, max_iter=50, lr=1e-2, nsample=2**10, seed=0, print_every=100):
         params = self.init_params()
@@ -183,8 +198,7 @@ class TransportMap():
         soboleng = qmc.Sobol(self.d, scramble=True, seed=seed)
         X = ndtri(soboleng.random(nsample) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
         for t in range(max_iter):
-            loss = self.reverse_kl(params, X)
-            grad = self.reverse_kl_grad(params, X) # redundant computation
+            loss, grad = jax.value_and_grad(self.reverse_kl)(params, X)
             params = params - lr * grad
             losses.append(loss.item())
             if t % print_every == 0:
@@ -194,44 +208,145 @@ class TransportMap():
                 break
         return params, losses
 
-    def optimize(self, max_iter=50, lr=None, nsample=2**10, seed=0):
-        optimizer = optax.lbfgs(learning_rate=lr)
+    def optimize_lbfgs_scipy(self, max_iter=200, nsample=2**10, sampler='mc', seed=0):
+        X = sample_gaussian(nsample, self.d, seed=seed, sampler=sampler)
+        log_q = -0.5 * jnp.sum(X**2, axis=-1) - 0.5 * self.d * jnp.log(2 * jnp.pi)
+
+        kl_logs = []
+        moments_logs = []
+        ess_logs = []
+        state = {'counter': 0}
+        print_every = 1
+        def callback(params):
+            state['counter'] += 1
+            
+            Z_nf, log_det = self.forward_and_logdet(params, X)      
+            proposal_log_densities = - log_det
+            
+            target_log_densities = jax.vmap(self.target.log_prob)(Z_nf)
+            log_weights = target_log_densities - proposal_log_densities
+            log_weights -= np.max(log_weights)
+            weights = np.exp(log_weights)
+
+            loss = jnp.mean(log_q - log_det - target_log_densities)
+            kl_logs.append(loss.item()) 
+
+            nf_samples = self.target.param_constrain(np.array(Z_nf, float))
+            moments = get_moments(nf_samples, weights)
+            moments_logs.append(moments)
+            ess = get_effective_sample_size(weights)
+            ess_logs.append(ess.item())
+            if state['counter'] % print_every == 0:
+                print(f"Iteration: {state['counter']}, Loss: {loss}, ESS: {ess}")
+            if ess >= 0.999 * nsample:
+                print(f"ESS is {ess}, stopping optimization")
+                raise StopIteration
+        try:
+            params = self.init_params()
+            # res = minimize(self.reverse_kl, jac=jax.grad(self.reverse_kl), x0=params, args=X, method='L-BFGS-B', options={'maxiter': max_iter}, callback=callback)  
+            res = fmin_l_bfgs_b(func=jax.value_and_grad(self.reverse_kl), x0=params, args=(X,), maxiter=max_iter, callback=callback, m=20)
+            # if res.success:
+            #     print("Optimization successful")
+        except StopIteration:
+            print("Optimization was terminated by the callback function")
+
+        return res[0], {'kl': kl_logs, 'moments': moments_logs, 'ESS': ess_logs}
+
+    def optimize(self, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=10, max_lr=1., nsample=2**10, seed=0, sampler='rqmc'):
+        X = sample_gaussian(nsample, self.d, seed=seed, sampler=sampler)
+        kl_logs = []
+        moments_logs = []
+        ess_logs = []
         params = self.init_params()
-        opt_state = optimizer.init(params)
 
-        # @jax.jit
-        def step(params, opt_state, x):
-            # loss, grad = jax.value_and_grad(self.reverse_kld)(params, x)
-            loss = self.reverse_kl(params, x)
-            grad = self.reverse_kl_grad(params, x)
-            updates, opt_state = optimizer.update(grad, opt_state, params, value=loss, grad=grad, value_fn=lambda params: self.reverse_kl(params, x))
-            params = optax.apply_updates(params, updates)
-            return params, opt_state, loss
+        # first run Adam for a few iterations
+        # def step(params, opt_state, x):
+        #     loss, grad = jax.value_and_grad(self.reverse_kl)(params, x)
+        #     updates, opt_state = opt_lbfgs.update(grad, opt_state, params)
+        #     params = params + updates
+        #     return params, opt_state, loss
 
-        soboleng = qmc.Sobol(self.d, scramble=True, seed=seed)
-        X = ndtri(soboleng.random(nsample) * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-        losses = []
+        # pbar = trange(memory_size, desc="Warm-up")
+        # for t in pbar:
+        #     loss, grad = jax.value_and_grad(self.reverse_kl)(params, X)
+        #     params = params - lr * grad
+        #     kl_logs.append(loss.item())
+        #     pbar.set_description(f"Warm-up Loss: {loss.item()}")
+
+            
+        
+        # now run LBFGS
+        # linesearch = optax.scale_by_backtracking_linesearch(
+        #     max_backtracking_steps=10, 
+        #     decrease_factor=0.5,
+        #     slope_rtol=1e-5,
+        #     increase_factor=jnp.inf,
+        #     max_learning_rate=0.01, 
+        #     store_grad=True)
+        # doesn't work; 
+        # loss, grad = optax.value_and_grad_from_state(self.reverse_kl)(params, state=opt_state, x=X)
+        # updates, opt_state = opt.update(grad, opt_state, params, value=loss, grad=grad, value_fn=self.reverse_kl, x=X)    
+        # print('learning rate', opt_state[1].learning_rate)
+        # params = params + updates
+        
+        opt_lbfgs = optax.scale_by_lbfgs(memory_size=memory_size)
+        # opt = optax.chain(opt_lbfgs, linesearch)
+        opt = opt_lbfgs
+        opt_state = opt.init(params)
         pbar = trange(max_iter)
         for t in pbar:
-            params, opt_state, loss = step(params, opt_state, X)
-            losses.append(loss.item())
+            loss, grad = jax.value_and_grad(self.reverse_kl)(params, X)
+            updates, opt_state = opt_lbfgs.update(grad, opt_state, params)
+            alpha = max_lr
+            for s in range(max_backtracking):
+                new_params = params - alpha * updates
+                try:
+                    new_loss = self.reverse_kl(new_params, X)
+                    if jnp.isnan(new_loss):
+                        raise ValueError
+                except:
+                    alpha *= 0.5
+                    print(s, "Error, decrease alpha to", alpha)
+                    continue
+                if new_loss < loss - slope_rtol * alpha * jnp.dot(updates, grad):
+                    print("Decrease condition satisfied")
+                    break
+                alpha *= 0.5
+            params = params - alpha * updates
+
+            kl_logs.append(loss.item())
             pbar.set_description(f"Loss: {loss.item()}")
-        self.set_params(params)
-        log_q = -0.5 * jnp.sum(X**2, axis=-1) - 0.5 * self.d * jnp.log(2 * jnp.pi)
-        Z_nf, log_det = self.forward_and_logdet(X)
-        log_p = self.target.log_prob(Z_nf)
-        weights = np.exp(log_p - log_q + log_det)
-        return Z_nf, weights, losses
+            # evaluation
+            Z_nf, log_det = self.forward_and_logdet(params, X)      
+            proposal_log_densities = - log_det
+            target_log_densities = jax.vmap(self.target.log_prob)(Z_nf)
+            log_weights = target_log_densities - proposal_log_densities
+            log_weights -= np.max(log_weights)
+            weights = np.exp(log_weights)
+            nf_samples = self.target.param_constrain(np.array(Z_nf, float))
+            moments_logs.append(get_moments(nf_samples, weights))
+            ess_logs.append(get_effective_sample_size(weights).item())
+
+            if jnp.linalg.norm(updates).item() < 1e-3:
+                print("Converged")
+
+        return params, {'kl': kl_logs, 'moments': moments_logs, 'ESS': ess_logs}
     
-    def _optimize_eval(self, max_iter=50, lr=None, rqmc=True, nsample=2**10, seed=0):
-        optimizer = optax.lbfgs(learning_rate=lr)
-        params = self.pack_params()
+    def _optimize_eval(self, max_iter=50, lr=None, rqmc=True, nsample=2**10, seed=0, algorithm='adam'):
+        if algorithm == 'lbfgs':
+            linesearch = optax.scale_by_backtracking_linesearch(max_backtracking_steps=15, max_learning_rate=1., store_grad=True)
+            # linesearch = optax.scale_by_zoom_linesearch(max_linesearch_steps=15, verbose=True)
+            optimizer = optax.lbfgs(linesearch=linesearch)
+        elif algorithm == 'adam':
+            optimizer = optax.adam(learning_rate=lr)
+
+        params = self.init_params()
         opt_state = optimizer.init(params)
 
         @jax.jit
         def step(params, opt_state, x):
-            loss, grad = jax.value_and_grad(self.reverse_kld)(params, x)
-            updates, opt_state = optimizer.update(grad, opt_state, params, value=loss, grad=grad, value_fn=lambda params: self.reverse_kld(params, x))
+            loss, grad = jax.value_and_grad(self.reverse_kl)(params, x)
+            updates, opt_state = optimizer.update(grad, opt_state, params, value=loss, grad=grad, value_fn=self.reverse_kl, x=x)
             params = optax.apply_updates(params, updates)
             return params, opt_state, loss
 
@@ -241,25 +356,26 @@ class TransportMap():
         else:
             rng = np.random.default_rng(seed)
             X = rng.standard_normal((nsample, self.d))
-        losses = []
-        evals = []
+        kl_logs = []
+        moments_logs = []
+        ess_logs = []
         pbar = trange(max_iter)
         for t in pbar:
             params, opt_state, loss = step(params, opt_state, X)
-            losses.append(loss.item())
-            pbar.set_description(f"Loss: {loss.item()}")
+            kl_logs.append(loss.item())
 
-            self.set_params(params)
-            log_q = -0.5 * jnp.sum(X**2, axis=-1) - 0.5 * self.d * jnp.log(2 * jnp.pi)
-            Z_nf, log_det = self.forward_and_logdet(X)
-            log_p = self.target.log_prob(Z_nf)
-            weights = np.exp(log_p - log_q + log_det)
-            mean_est = np.mean(Z_nf * weights[:, None], 0) / np.mean(weights)
-            var_est = np.mean(Z_nf**2 * weights[:, None], 0) / np.mean(weights)
-            err_1 = np.mean((mean_est - self.true_mean)**2).item()
-            err_2 = np.mean((var_est - self.true_var)**2).item()
-            evals.append((err_1, err_2))
-        return Z_nf, weights, losses, evals
+            Z_nf, log_det = self.forward_and_logdet(params, X)      
+            proposal_log_densities = - log_det
+            target_log_densities = jax.vmap(self.target.log_prob)(Z_nf)
+            log_weights = target_log_densities - proposal_log_densities
+            log_weights -= np.max(log_weights)
+            weights = np.exp(log_weights)
+            nf_samples = self.target.param_constrain(np.array(Z_nf, float))
+            moments = get_moments(nf_samples, weights)
+            moments_logs.append(moments)
+            ess = get_effective_sample_size(weights)
+            ess_logs.append(ess.item())
+        return Z_nf, weights, {'kl_logs': kl_logs, 'moments_logs': moments_logs, 'ess_logs': ess_logs}
     
 
     def sample(self, n, params, constrained=True, seed=0, rqmc=True, return_weights=False):
@@ -278,7 +394,7 @@ class TransportMap():
                 return self.target.param_constrain(np.array(Z_nf, float))
         log_q = -0.5 * jnp.sum(X**2, axis=-1) - 0.5 * self.d * jnp.log(2 * jnp.pi)
         proposal_log_densities = log_q - log_det
-        target_log_densities = self.target.log_prob(np.array(Z_nf, float))
+        target_log_densities = self.target.log_prob(Z_nf)
         log_weights = target_log_densities - proposal_log_densities
         log_weights -= np.max(log_weights)
         weights = np.exp(log_weights)
