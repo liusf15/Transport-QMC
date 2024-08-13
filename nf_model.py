@@ -85,6 +85,7 @@ class TransportMap():
         # L = params[self.d:self.d+self.d**2].reshape(self.d, self.d)
         weights_unc = params[self.d+self.d+self.d*(self.d-1)//2:].reshape(self.d, self.max_deg)
         weights = softmax(weights_unc, axis=1)
+        # TODO: fix the last one to 0
         return mu, L, weights
 
     def forward(self, params, x):
