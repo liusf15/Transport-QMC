@@ -16,3 +16,15 @@ def sample_gaussian(nsample, d, seed=0, sampler='rqmc'):
     else:
         raise NotImplementedError
     return X
+
+def get_moments(samples, weights=None):
+    if weights is None:
+        weights = np.ones(samples.shape[0]) / samples.shape[0]
+    else:
+        weights = weights / np.sum(weights)
+    moment_1 = np.sum(samples * weights[:, None], axis=0)
+    moment_2 = np.sum(samples**2 * weights[:, None], axis=0)
+    return moment_1, moment_2
+
+def get_effective_sample_size(weights):
+    return np.sum(weights)**2 / np.sum(weights**2)

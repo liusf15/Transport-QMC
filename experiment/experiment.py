@@ -10,13 +10,9 @@ from scipy.optimize import minimize
 import jax
 import jax.numpy as jnp
 from experiment.polynomial.targets import arK
-from qmc_flow.nf_model import TransportMap
+from qmc_flow.models import PolynomialModel
 
 import bridgestan as bs
-
-
-def get_effective_sample_size(weights):
-    return np.sum(weights)**2 / np.sum(weights**2)
 
 def get_mse(true_moments, est_moments):
     mse_1 = np.mean((true_moments[0] - est_moments[0])**2)
@@ -31,7 +27,7 @@ def run_experiment(name, max_deg, nsample, method, max_iter, seed, savepath):
     target = arK(datapath)
     d = target.d
     bs_model = bs.StanModel(stanpath, datapath)
-    nf = TransportMap(d, target, max_deg=max_deg)
+    nf = PolynomialModel(d, target, max_deg=max_deg)
 
     start = time.time()
     # params_lbfgs, losses_lbfgs = nf.optimize_lbfgs_scipy(max_iter=max_iter, nsample=nsample, seed=seed, sampler='rqmc')
