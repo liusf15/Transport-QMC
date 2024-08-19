@@ -31,16 +31,19 @@ def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
         if name == 'gaussian':
             d = 2
             mean = jnp.zeros(d)
-            cov = jnp.array([[1., 0.5], [0.5, 1.]])
+            # cov = jnp.array([[1., 0.5], [0.5, 1.]])
+            # cov = (jnp.ones((d, d)) * 0.5 + jnp.eye(d) * 0.5) * 2.
+            cov = jnp.eye(d) * 3.
             target = Gaussian(mean, cov)
     d = target.d
 
     nf = CopulaModel(d, target, max_deg=max_deg)
     params = nf.init_params()
+    params = params.at[d:d+d].set(jnp.log(3) / 2 + 1.)
     
-    div = 'rkl'
+    div = 'chisq'
     print("Training", div) 
-    params, logs = optimize(nf, params, div, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=1.)
+    params, logs = optimize(nf, params, div, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=.1)
 
     # print("Training Chi-squared divergence")
     # params2, logs2 = optimize(nf, params, 'chisq', max_iter=10, nsample=nsample, seed=seed, sampler=sampler, max_lr=0.1)
