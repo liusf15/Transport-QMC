@@ -1,4 +1,5 @@
 import numpy as np
+import optax
 import pandas as pd
 import os
 import argparse
@@ -10,8 +11,8 @@ from scipy.optimize import minimize
 import jax
 import jax.numpy as jnp
 
-from experiment.polynomial.targets import StanModel, Gaussian
-from qmc_flow.models import PolynomialModel, CopulaModel
+from qmc_flow.targets import StanModel, Gaussian
+from qmc_flow.models import CopulaModel
 from qmc_flow.train import optimize, optimize_variance
 from qmc_flow.utils import sample_gaussian
 
@@ -23,27 +24,52 @@ def get_mse(true_moments, est_moments):
     return mse_1, mse_2
 
 def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
-    if name in ['arK', 'hmm', 'garch', 'eight-schools']:
+    if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'glmm-poisson']:
         data_path = f"qmc_flow/stan_models/{name}.json"
         stan_path = f"qmc_flow/stan_models/{name}.stan"
         target = StanModel(stan_path, data_path)
     else:
         if name == 'gaussian':
-            d = 2
+            d = 10
             mean = jnp.zeros(d)
             # cov = jnp.array([[1., 0.5], [0.5, 1.]])
-            # cov = (jnp.ones((d, d)) * 0.5 + jnp.eye(d) * 0.5) * 2.
-            cov = jnp.eye(d) * 3.
+            cov = (jnp.ones((d, d)) * 0.5 + jnp.eye(d) * 0.5) * 2.
+            # cov = jnp.eye(d) * 3.
             target = Gaussian(mean, cov)
     d = target.d
+    
 
     nf = CopulaModel(d, target, max_deg=max_deg)
     params = nf.init_params()
-    params = params.at[d:d+d].set(jnp.log(3) / 2 + 1.)
+    # mu, L, weights = nf.unpack_params(params)
+    # params = nf.pack_params(mu, L, weights)
+    # params = params.at[d:d+d].set(jnp.log(3) / 2 + 1.)
     
-    div = 'chisq'
+    div = 'rkl'
     print("Training", div) 
+    start = time.time()
+    # opt_jax = jax.jit(lambda params: optimize(nf, params, div, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=1.))
+    # params, logs = opt_jax(params)
     params, logs = optimize(nf, params, div, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=.1)
+    end = time.time()
+    print("Time elapsed", end - start)
+
+    # X = sample_gaussian(nsample, d, seed=seed, sampler=sampler)
+    # Z_nf, log_det = nf.forward_and_logdet(params, X)
+    # log_q = -0.5 * jnp.sum(X**2, axis=-1) - 0.5 * d * jnp.log(2 * jnp.pi)
+    # proposal_log_densities = log_q - log_det
+    # target_log_densities = jax.vmap(target.log_prob)(Z_nf)
+    # log_weights = target_log_densities - proposal_log_densities
+    # log_weights -= np.max(log_weights)
+    # weights = np.exp(log_weights)
+    constrained = ~(name == 'gaussian')
+    samples, weights = nf.sample(nsample, params, constrained=constrained, seed=seed, sampler=sampler, return_weights=True)
+    print('ESS', np.sum(weights)**2 / np.sum(weights**2))
+
+    mu, L, weights = nf.unpack_params(params)
+    params2 = nf.pack_params(mu, L*2, weights)
+    # traininig chisquare divergence with a heavy-tailed starting point
+
 
     # print("Training Chi-squared divergence")
     # params2, logs2 = optimize(nf, params, 'chisq', max_iter=10, nsample=nsample, seed=seed, sampler=sampler, max_lr=0.1)
