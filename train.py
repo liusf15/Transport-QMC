@@ -24,7 +24,6 @@ class LineSearchState(NamedTuple):
     updates: jnp.ndarray
     v_g_prod: float
 
-# @partial(jax.jit, static_argnames=('model', 'div_name', 'max_iter', 'max_backtracking', 'nsample', 'seed', 'sampler'))
 def optimize(model, params0, div_name, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=10, max_lr=1., nsample=2**10, seed=0, sampler='rqmc'):
     X = sample_gaussian(nsample, model.d, seed=seed, sampler=sampler)
     min_lr = max_lr / (1 << max_backtracking)

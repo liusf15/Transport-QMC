@@ -9,7 +9,8 @@ import jax.numpy as jnp
 
 from qmc_flow.targets import StanModel, Gaussian
 from qmc_flow.models import CopulaModel
-from qmc_flow.train import optimize, optimize_variance
+from qmc_flow.train import optimize
+from qmc_flow.utils import get_moments, get_effective_sample_size
 
 def get_mse(true_moments, est_moments):
     mse_1 = np.mean((true_moments[0] - est_moments[0])**2)
@@ -34,45 +35,23 @@ def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
 
     nf = CopulaModel(d, target, max_deg=max_deg)
     params = nf.init_params()
-    # mu, L, weights = nf.unpack_params(params)
-    # params = nf.pack_params(mu, L, weights)
-    # params = params.at[d:d+d].set(jnp.log(3) / 2 + 1.)
     
     div = 'rkl'
     print("Training", div) 
     start = time.time()
-    # opt_jax = jax.jit(lambda params: optimize(nf, params, div, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=1.))
-    # params, logs = opt_jax(params)
     params, logs = optimize(nf, params, div, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=.1)
     end = time.time()
     print("Time elapsed", end - start)
 
-    # X = sample_gaussian(nsample, d, seed=seed, sampler=sampler)
-    # Z_nf, log_det = nf.forward_and_logdet(params, X)
-    # log_q = -0.5 * jnp.sum(X**2, axis=-1) - 0.5 * d * jnp.log(2 * jnp.pi)
-    # proposal_log_densities = log_q - log_det
-    # target_log_densities = jax.vmap(target.log_prob)(Z_nf)
-    # log_weights = target_log_densities - proposal_log_densities
-    # log_weights -= np.max(log_weights)
-    # weights = np.exp(log_weights)
     constrained = ~(name == 'gaussian')
-    samples, weights = nf.sample(nsample, params, constrained=constrained, seed=seed, sampler=sampler, return_weights=True)
-    print('ESS', np.sum(weights)**2 / np.sum(weights**2))
-
-    mu, L, weights = nf.unpack_params(params)
-    params2 = nf.pack_params(mu, L*2, weights)
-    # traininig chisquare divergence with a heavy-tailed starting point
-
-
-    # print("Training Chi-squared divergence")
-    # params2, logs2 = optimize(nf, params, 'chisq', max_iter=10, nsample=nsample, seed=seed, sampler=sampler, max_lr=0.1)
-
-
-    # results_lbfgs = {'time': lbfgs_time, 'losses': losses_lbfgs['kl'], 'ESS': losses_lbfgs['ESS'], 'moments': losses_lbfgs['moments']}
-    # results = {'lbfgs': results_lbfgs}
+    nf_samples, weights = nf.sample(nsample, params, constrained=constrained, seed=seed, sampler=sampler, return_weights=True)
+    moment = get_moments(nf_samples, weights)
+    ess = get_effective_sample_size(weights).item()
+    results = {'moment': moment, 'ess': ess, 'logs': logs}
+    
     savepath = os.path.join(savepath, f'copula_{div}_{sampler}_n_{nsample}_deg_{max_deg}_iter_{max_iter}_{seed}.pkl')
     with open(savepath, 'wb') as f:
-        pickle.dump(logs, f)
+        pickle.dump(results, f)
     print('saved to', savepath)
 
 
