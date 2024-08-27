@@ -43,11 +43,6 @@ def optimize(model, params0, div_name, max_iter=50, max_backtracking=20, slope_r
         state = state._replace(alpha=new_alpha, new_loss=new_loss)
         return state
 
-    
-
-    div_logs = []
-    moments_logs = []
-    ess_logs = []
     params = params0
     
     opt = optax.scale_by_lbfgs(memory_size=memory_size)

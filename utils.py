@@ -28,3 +28,8 @@ def get_moments(samples, weights=None):
 
 def get_effective_sample_size(weights):
     return np.sum(weights)**2 / np.sum(weights**2)
+
+def get_mse(true_moments, est_moments):
+    mse_1 = np.mean((true_moments[0] - est_moments[0])**2)
+    mse_2 = np.mean((true_moments[1] - est_moments[1])**2)
+    return mse_1, mse_2
