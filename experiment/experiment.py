@@ -12,10 +12,9 @@ from qmc_flow.models import CopulaModel
 from qmc_flow.train import optimize
 from qmc_flow.utils import get_moments, get_effective_sample_size
 
-def get_mse(true_moments, est_moments):
-    mse_1 = np.mean((true_moments[0] - est_moments[0])**2)
-    mse_2 = np.mean((true_moments[1] - est_moments[1])**2)
-    return mse_1, mse_2
+jax.config.update("jax_debug_nans", True)
+
+
 
 def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
     if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'glmm-poisson']:
@@ -39,15 +38,19 @@ def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
     div = 'rkl'
     print("Training", div) 
     start = time.time()
-    params, logs = optimize(nf, params, div, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=.1)
+    params, logs = optimize(nf, params, div, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=1.)
     end = time.time()
     print("Time elapsed", end - start)
+    print('rkl, fkl, chisq') 
+    print(np.array(logs).T[-1])
 
-    constrained = ~(name == 'gaussian')
+    constrained = (name != 'gaussian')
     nf_samples, weights = nf.sample(nsample, params, constrained=constrained, seed=seed, sampler=sampler, return_weights=True)
     moment = get_moments(nf_samples, weights)
     ess = get_effective_sample_size(weights).item()
-    results = {'moment': moment, 'ess': ess, 'logs': logs}
+    print('ESS:', ess)
+
+    results = {'moment': moment, 'ess': ess, 'logs': np.array(logs).T}
     
     savepath = os.path.join(savepath, f'copula_{div}_{sampler}_n_{nsample}_deg_{max_deg}_iter_{max_iter}_{seed}.pkl')
     with open(savepath, 'wb') as f:
