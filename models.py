@@ -33,6 +33,15 @@ class TransportMap:
     def sample(self, n, params):
         raise NotImplementedError
 
+def get_beta_shapes(max_deg):
+    return np.array([degs for degs in itertools.product(np.arange(1, max_deg), repeat=2) if sum(degs) <= max_deg])
+
+def weighted_beta_cdf(x, shapes, weights):
+    return jnp.dot(betainc(shapes[:,0], shapes[:, 1], x), weights)
+
+def weighted_beta_pdf(x, shapes, weights):
+    return jnp.dot(beta_pdf(x, shapes[:,0], shapes[:, 1]), weights)
+
 def bernstein_poly(x, deg, weights):
     return jnp.dot(betainc(jnp.arange(1, deg + 1), jnp.arange(deg, 0, -1), x), weights)
 
@@ -42,6 +51,8 @@ def bernstein_poly_grad(x, deg, weights):
 class CopulaModel(TransportMap):
     def __init__(self, d, target, max_deg, link_func=['sigmoid', 'logit']) -> None:
         super().__init__(d, target, max_deg)
+        self.shapes = get_beta_shapes(max_deg)
+        self.num_shapes = len(self.shapes)
         self.link_func = link_func
         if link_func[0] == 'sigmoid':
             self.R_to_01 = sigmoid
@@ -60,8 +71,10 @@ class CopulaModel(TransportMap):
     
     def init_params(self):
         d = self.d
-        num_params = d + d + d * (d - 1) // 2 + d * (self.max_deg)
-        return jnp.zeros(num_params)
+        num_params = d + d + d * (d - 1) // 2 + d * len(self.shapes)
+        weights_unc = jnp.zeros((d, self.num_shapes))
+        weights_unc = weights_unc.at[:, 0].set(1.)
+        return jnp.concat([jnp.zeros(d + d + d * (d - 1) // 2), weights_unc.flatten()])
     
     def pack_params(self, mu, L, weights):
         weights_unc = jnp.log(weights)
@@ -83,10 +96,10 @@ class CopulaModel(TransportMap):
         # Fill the lower triangular part
         L = L.at[mask].set(params[self.d+self.d:self.d+self.d+self.d*(self.d-1)//2])
         # L = params[self.d:self.d+self.d**2].reshape(self.d, self.d)
-        weights_unc = params[self.d+self.d+self.d*(self.d-1)//2:].reshape(self.d, self.max_deg)
+        weights_unc = params[self.d+self.d+self.d*(self.d-1)//2:].reshape(self.d, self.num_shapes)
         # weights_unc_0 = jnp.concatenate([weights_unc, jnp.zeros((self.d, 1))], axis=1)
         weights = softmax(weights_unc, axis=1)
-        # TODO: fix the last one to 0
+        # TODO: fix the first weight
         return mu, L, weights
 
     def forward(self, params, x):
@@ -101,7 +114,8 @@ class CopulaModel(TransportMap):
         # transformation by Bernstein polynomial
         output = []
         for j in range(self.d):
-            output.append(bernstein_poly(t_x[:, j:j+1], deg=self.max_deg, weights=weights[j]))
+            # output.append(bernstein_poly(t_x[:, j:j+1], deg=self.max_deg, weights=weights[j]))
+            output.append(weighted_beta_cdf(t_x[:, j:j+1], self.shapes, weights[j]))
         output = jnp.stack(output, axis=1)
 
         # map to R
@@ -137,8 +151,11 @@ class CopulaModel(TransportMap):
 
         output = []
         for j in range(self.d):
-            output.append(bernstein_poly(t_x[:, j:j+1], deg=self.max_deg, weights=weights[j]))
-            log_det += jnp.log(bernstein_poly_grad(t_x[:, j:j+1], deg=self.max_deg, weights=weights[j]))
+            # output.append(bernstein_poly(t_x[:, j:j+1], deg=self.max_deg, weights=weights[j]))
+            output.append(weighted_beta_cdf(t_x[:, j:j+1], self.shapes, weights[j]))
+
+            # log_det += jnp.log(bernstein_poly_grad(t_x[:, j:j+1], deg=self.max_deg, weights=weights[j]))
+            log_det += jnp.log(weighted_beta_pdf(t_x[:, j:j+1], self.shapes, weights[j]))
         output = jnp.stack(output, axis=1)
         
 
@@ -168,6 +185,8 @@ class CopulaModel(TransportMap):
         z, log_det = self.forward_and_logdet(params, x) 
         log_p = jax.vmap(self.target.log_prob)(z)
         log_weight = log_p - log_q + log_det
+        mask_inf = abs(log_weight) != jnp.inf
+        # log_weight = log_weight[mask_inf]
         offset = jnp.mean(log_weight)
         if div_name == 'rkl':
             return jnp.mean(-log_weight)

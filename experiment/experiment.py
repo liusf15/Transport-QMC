@@ -12,8 +12,8 @@ from qmc_flow.models import CopulaModel
 from qmc_flow.train import optimize
 from qmc_flow.utils import get_moments, get_effective_sample_size
 
-jax.config.update("jax_debug_nans", True)
-
+# jax.config.update("jax_debug_nans", True)
+# jax.config.update("jax_disable_jit", True)
 
 
 def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
@@ -31,9 +31,10 @@ def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
             target = Gaussian(mean, cov)
     d = target.d
     
-
     nf = CopulaModel(d, target, max_deg=max_deg)
     params = nf.init_params()
+    X = np.random.randn(nsample, d)
+    nf.divergence(params, X, 'rkl')
     
     div = 'rkl'
     print("Training", div) 
@@ -52,7 +53,7 @@ def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
 
     results = {'moment': moment, 'ess': ess, 'logs': np.array(logs).T}
     
-    savepath = os.path.join(savepath, f'copula_{div}_{sampler}_n_{nsample}_deg_{max_deg}_iter_{max_iter}_{seed}.pkl')
+    savepath = os.path.join(savepath, f'betamix_{div}_{sampler}_n_{nsample}_deg_{max_deg}_iter_{max_iter}_{seed}.pkl')
     with open(savepath, 'wb') as f:
         pickle.dump(results, f)
     print('saved to', savepath)

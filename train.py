@@ -51,6 +51,7 @@ def optimize(model, params0, div_name, max_iter=50, max_backtracking=20, slope_r
     @jax_tqdm.scan_tqdm(max_iter)
     def lbfgs_step(carry, t):
         params, opt_state = carry
+        # jax.debug.print("{}", params)
         loss, grad = jax.value_and_grad(loss_fn)(params, X, div_name)
         updates, opt_state = opt.update(grad, opt_state, params)
 
@@ -60,6 +61,7 @@ def optimize(model, params0, div_name, max_iter=50, max_backtracking=20, slope_r
         init_state = LineSearchState(alpha, new_loss, params, loss, updates, tree_vdot(updates, grad))
         final_state = jax.lax.while_loop(LS_cond, LS_step, init_state)
         params = tree_add_scalar_mul(params, -final_state.alpha, updates)
+        # jax.debug.breakpoint()
         return (params, opt_state), loss_fn(params, X, 'all')
 
     carry = (params, opt_state)
