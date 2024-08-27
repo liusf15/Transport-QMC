@@ -25,16 +25,12 @@ def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
         if name == 'gaussian':
             d = 10
             mean = jnp.zeros(d)
-            # cov = jnp.array([[1., 0.5], [0.5, 1.]])
             cov = (jnp.ones((d, d)) * 0.5 + jnp.eye(d) * 0.5) * 2.
-            # cov = jnp.eye(d) * 3.
             target = Gaussian(mean, cov)
     d = target.d
     
     nf = CopulaModel(d, target, max_deg=max_deg)
     params = nf.init_params()
-    X = np.random.randn(nsample, d)
-    nf.divergence(params, X, 'rkl')
     
     div = 'rkl'
     print("Training", div) 

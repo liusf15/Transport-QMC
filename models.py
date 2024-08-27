@@ -247,6 +247,33 @@ class CopulaModel(TransportMap):
             Z_nf = self.target.param_constrain(np.array(Z_nf, float))
         return Z_nf, weights
 
+class CompositeCopula(CopulaModel):
+    def __init__(self, d, target, max_deg, num_layers) -> None:
+        super().__init__(d, target, max_deg)
+        self.num_layers = num_layers
+    
+    def init_params(self):
+        d = self.d
+        num_layers = self.num_layers
+        params = []
+        for _ in range(num_layers):
+            params.append(super().init_params())
+        return params
+    
+    def forward(self, params, x):
+        output = x
+        for p in params:
+            output = super().forward(p, output)
+        return output
+    
+    def forward_and_logdet(self, params, x):
+        output = x
+        log_det = 0
+        for p in params:
+            output, ld = super().forward_and_logdet(p, output)
+            log_det += ld
+        return output, log_det
+
 
 def hermite_polynomial(degree):
     """
