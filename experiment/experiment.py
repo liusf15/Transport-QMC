@@ -1,22 +1,15 @@
 import numpy as np
-import optax
 import pandas as pd
 import os
 import argparse
 import pickle
 import time
-from scipy.stats import qmc
-from scipy.special import ndtri
-from scipy.optimize import minimize
 import jax
 import jax.numpy as jnp
 
 from qmc_flow.targets import StanModel, Gaussian
 from qmc_flow.models import CopulaModel
 from qmc_flow.train import optimize, optimize_variance
-from qmc_flow.utils import sample_gaussian
-
-import bridgestan as bs
 
 def get_mse(true_moments, est_moments):
     mse_1 = np.mean((true_moments[0] - est_moments[0])**2)
