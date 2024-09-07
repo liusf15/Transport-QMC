@@ -1,14 +1,12 @@
 import numpy as np
-import pandas as pd
 import os
 import argparse
 import pickle
 import time
-import jax
 import jax.numpy as jnp
 
 from qmc_flow.targets import StanModel, Gaussian
-from qmc_flow.models import CopulaModel
+from qmc_flow.models.copula import CopulaModel
 from qmc_flow.train import optimize
 from qmc_flow.utils import get_moments, get_effective_sample_size
 
@@ -42,7 +40,6 @@ def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
     print('rkl, fkl, chisq') 
     print(np.array(logs).T[-1])
 
-    constrained = (name != 'gaussian')
     nf_samples, weights = nf.sample(params, nsample, df=df, seed=seed, sampler=sampler)
     moment = get_moments(nf_samples, weights)
     ess = get_effective_sample_size(weights).item()
