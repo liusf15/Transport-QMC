@@ -13,7 +13,7 @@ from functools import partial
 from typing import NamedTuple
 import matplotlib.pyplot as plt
 from tqdm import trange
-from qmc_flow.utils import sample_gaussian, get_moments, get_effective_sample_size
+from qmc_flow.utils import sample_gaussian, get_moments, get_effective_sample_size, sample_t
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
 class LineSearchState(NamedTuple):
@@ -24,8 +24,9 @@ class LineSearchState(NamedTuple):
     updates: jnp.ndarray
     v_g_prod: float
 
-def optimize(model, params0, div_name, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=10, max_lr=1., nsample=2**10, seed=0, sampler='rqmc'):
-    X = sample_gaussian(nsample, model.d, seed=seed, sampler=sampler)
+def optimize(model, params0, div_name, df=np.Inf, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=10, max_lr=1., nsample=2**10, seed=0, sampler='rqmc'):
+    # X = sample_gaussian(nsample, model.d, seed=seed, sampler=sampler)
+    X = sample_t(nsample, model.d, df=df, seed=seed, sampler=sampler)
     min_lr = max_lr / (1 << max_backtracking)
 
     loss_fn = jax.jit(model.divergence, static_argnames=('div_name', ))
