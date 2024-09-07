@@ -17,7 +17,8 @@ from qmc_flow.utils import get_moments, get_effective_sample_size
 
 
 def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
-    if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'glmm-poisson']:
+    df = 5
+    if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'rosenbrock']:
         data_path = f"qmc_flow/stan_models/{name}.json"
         stan_path = f"qmc_flow/stan_models/{name}.stan"
         target = StanModel(stan_path, data_path)
@@ -35,14 +36,14 @@ def run_experiment(name, max_deg, nsample, sampler, max_iter, seed, savepath):
     div = 'rkl'
     print("Training", div) 
     start = time.time()
-    params, logs = optimize(nf, params, div, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=1.)
+    params, logs = optimize(nf, params, div, df=df, max_iter=max_iter, nsample=nsample, seed=seed, sampler=sampler, max_lr=1.)
     end = time.time()
     print("Time elapsed", end - start)
     print('rkl, fkl, chisq') 
     print(np.array(logs).T[-1])
 
     constrained = (name != 'gaussian')
-    nf_samples, weights = nf.sample(nsample, params, constrained=constrained, seed=seed, sampler=sampler, return_weights=True)
+    nf_samples, weights = nf.sample(params, nsample, df=df, seed=seed, sampler=sampler)
     moment = get_moments(nf_samples, weights)
     ess = get_effective_sample_size(weights).item()
     print('ESS:', ess)

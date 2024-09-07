@@ -62,31 +62,31 @@ class LogNormal:
         return stats.multivariate_normal.logpdf(jnp.log(x), mean=self.mean, cov=self.cov) - jnp.log(x).sum(axis=-1)
 
 class Banana:
-    def __init__(self, dim):
-        self.dim = dim
-        self.mean = np.zeros(dim)
+    def __init__(self, d):
+        self.d = d
+        self.mean = np.zeros(d)
         cov_ = np.array([[1., 0.], [0., 1+ 2.]])
-        self.cov = scipy.linalg.block_diag(cov_, np.eye(dim - 2))
+        self.cov = scipy.linalg.block_diag(cov_, np.eye(d - 2))
 
     def log_prob(self, x):
         x1, x2 = x[:, 0], x[:, 1]
         term1 = -0.5 * x1**2 - 0.5 * jnp.log(2 * jnp.pi)
         term2 = -0.5 * (x2 - (x1**2 - 1))**2 - 0.5 * jnp.log(2 * jnp.pi)
-        term3 = -0.5 * jnp.sum(x[:, 2:]**2, axis=1) - 0.5 * (self.dim - 2) * jnp.log(2 * jnp.pi)
+        term3 = -0.5 * jnp.sum(x[:, 2:]**2, axis=1) - 0.5 * (self.d - 2) * jnp.log(2 * jnp.pi)
         return term1 + term2 + term3
 
 class BananaNormal:
-    def __init__(self, dim):
-        self.dim = dim
-        self.mean = np.zeros(dim)
+    def __init__(self, d):
+        self.d = d
+        self.mean = np.zeros(d)
         cov_ = np.array([[1., 0.], [0., 2+ .5]])
-        self.cov = scipy.linalg.block_diag(cov_, np.eye(dim - 2))
+        self.cov = scipy.linalg.block_diag(cov_, np.eye(d - 2))
 
     def log_prob(self, x):
         x1, x2 = x[0], x[1]
         term1 = -0.5 * x1**2 - 0.5 * jnp.log(2 * jnp.pi)
         term2 = -0.5 * 2 * (x2 - (x1**2 - 0.5 - 0.5))**2 - 0.5 * jnp.log(2 * jnp.pi * .5)
-        term3 = -0.5 * jnp.sum(x[2:]**2) - 0.5 * (self.dim - 2) * jnp.log(2 * jnp.pi)
+        term3 = -0.5 * jnp.sum(x[2:]**2) - 0.5 * (self.d - 2) * jnp.log(2 * jnp.pi)
         return term1 + term2 + term3
     
     def density(self, x):
@@ -113,9 +113,9 @@ class BayesianLogisticRegression:
         self.prior_scale = prior_scale
 
     def log_prob(self, w):
-        logits = jnp.dot(w, self.X.T)
-        log_prior = -0.5 * jnp.sum((w / self.prior_scale)**2, axis=1) - 0.5 * self.d * jnp.log(2 * jnp.pi)
-        log_lik = jnp.sum(logits * self.y - jnp.logaddexp(0, logits), axis=1)
+        logits = jnp.dot(self.X, w)
+        log_prior = -0.5 * jnp.sum((w / self.prior_scale)**2) - 0.5 * self.d * jnp.log(2 * jnp.pi)
+        log_lik = jnp.sum(logits * self.y - jnp.logaddexp(0, logits))
         return log_prior + log_lik
 
 class arK:
@@ -179,7 +179,6 @@ class Posterior:
         # if np.isnan(log_density) or np.isnan(gradient).any():
         #     raise ValueError(f"NaN values in log density or gradient at {x}")
 
-        
 
     def param_unconstrain(self, x):
         return self.bsmodel.param_unconstrain(x)
