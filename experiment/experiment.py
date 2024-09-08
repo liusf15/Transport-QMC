@@ -51,6 +51,7 @@ def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3,
     moment_1, moment_2 = get_moments(samples, weights=weights)
 
     results = {
+        'params': params,
         'time': end - start,
         'rkl': logs.rkl,
         'fkl': logs.fkl,
