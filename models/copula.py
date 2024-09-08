@@ -98,7 +98,7 @@ class CopulaModel:
         output = jnp.stack(output, axis=1)
 
         # map to R
-        output = jnp.clip(output, 1e-13, 1 - 1e-13)
+        output = jnp.clip(output, MACHINE_EPSILON * .5, 1 - MACHINE_EPSILON * .5)
         output = self.R_to_01_inv(output)
 
         return output
