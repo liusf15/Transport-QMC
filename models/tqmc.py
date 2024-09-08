@@ -8,8 +8,14 @@ from jax.scipy.stats.beta import pdf as beta_pdf
 from jax.nn import softmax, sigmoid
 import jax
 
+from typing import NamedTuple
+
+Metrics = NamedTuple('Metrics', [('rkl', float), ('fkl', float), ('chisq', float), ('ess', float), ('moment_1', jnp.ndarray), ('moment_2', jnp.ndarray)])
+
 from qmc_flow.utils import sample_t
 MACHINE_EPSILON = np.finfo(np.float64).eps
+
+
 
 def mixture_beta_cdf(x, shapes, weights):
     return jnp.dot(betainc(shapes[:,0], shapes[:, 1], x), softmax(weights))
@@ -103,7 +109,9 @@ class TransportQMC:
         chisq = logsumexp(2 * (log_weights - offset)) - jnp.log(len(log_weights)) + 2 * offset
         rkl = jnp.mean(- log_weights)
         fkl = logsumexp(log_weights, b=log_weights - offset) + offset * logsumexp(log_weights)
-        return rkl, fkl, chisq, ess
+        moment_1 = jnp.sum(X * weights[:, None], axis=0) / jnp.sum(weights)
+        moment_2 = jnp.sum(X**2 * weights[:, None], axis=0) / jnp.sum(weights)
+        return Metrics(rkl, fkl, chisq, ess, moment_1, moment_2)
 
     def sample(self, params, nsample, seed=0):
         """

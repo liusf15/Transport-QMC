@@ -131,6 +131,36 @@ def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, m
 
     # return params, {'div_logs': div_logs, 'moments': moments_logs, 'ESS': ess_logs}
 
+def sgd(loss_fn, params0, max_iter=50, lr=1e-3, callback=None):
+    opt = optax.adam(lr)
+    opt_state = opt.init(params0)
+    params = params0
+    # for it in range(max_iter):
+    #     grad = jax.grad(loss_fn)(params)
+    #     updates, opt_state = opt.update(grad, opt_state, params)
+    #     params = optax.apply_updates(params, updates)
+    #     if callback is not None:
+    #         metrics.append(callback(params))
+    #     else:
+    #         metrics.append(None)
+    
+    @jax_tqdm.scan_tqdm(max_iter)
+    def sgd_step(carry, t):
+        params, opt_state = carry
+
+        grad = jax.grad(loss_fn)(params)
+        updates, opt_state = opt.update(grad, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        if callback is not None:
+            metrics = callback(params)
+        else:
+            metrics = None
+        return (params, opt_state), metrics
+
+    carry = (params, opt_state)
+    final_state, losses = jax.lax.scan(sgd_step, carry, np.arange(max_iter))
+    return final_state[0], losses
+
 def optimize_variance(model, params0, offset_logweight, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=10, max_lr=1., nsample=2**10, seed=0, sampler='rqmc'):
     X = sample_gaussian(nsample, model.d, seed=seed, sampler=sampler)
     kl_logs = []
