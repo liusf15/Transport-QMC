@@ -10,6 +10,7 @@ from scipy.stats import qmc
 from qmc_flow.targets import StanModel, Gaussian
 from qmc_flow.models.tqmc import TransportQMC
 from qmc_flow.train import lbfgs, sgd
+from qmc_flow.utils import get_moments
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
@@ -45,14 +46,18 @@ def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3,
     print('Time elapsed', end - start)
     print('rkl', logs.rkl[-1])
     print('ESS', logs.ess[-1])
+
+    samples, weights = model.sample(params, nsample, seed=seed)
+    moment_1, moment_2 = get_moments(samples, weights=weights)
+
     results = {
         'time': end - start,
         'rkl': logs.rkl,
         'fkl': logs.fkl,
         'chisq': logs.chisq,
         'ess': logs.ess,
-        'moment_1': logs.moment_1,
-        'moment_2': logs.moment_2
+        'moment_1': moment_1,
+        'moment_2': moment_2
     }
     savepath = os.path.join(savepath, f'tqmc_n_{nsample}_comp_{num_composition}_deg_{max_deg}_{optimizer}_iter_{max_iter}_lr_{lr}_{seed}.pkl')
     with open(savepath, 'wb') as f:
