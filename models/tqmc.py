@@ -93,6 +93,18 @@ class TransportQMC:
         log_p = jax.vmap(self.target.log_prob)(z)
         return jnp.mean( - log_det - log_p)
     
+    def metrics(self, params, u):
+        X, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u)
+        log_p = jax.vmap(self.target.log_prob)(X)
+        log_weights = log_p + log_det
+        offset = jnp.mean(log_weights)
+        weights = jnp.exp(log_weights - offset)
+        ess = jnp.sum(weights)**2 / jnp.sum(weights**2)
+        chisq = logsumexp(2 * (log_weights - offset)) - jnp.log(len(log_weights)) + 2 * offset
+        rkl = jnp.mean(- log_weights)
+        fkl = logsumexp(log_weights, b=log_weights - offset) + offset * logsumexp(log_weights)
+        return rkl, fkl, chisq, ess
+
     def sample(self, params, nsample, seed=0):
         """
         seed: either integer seed or a numpy random generator

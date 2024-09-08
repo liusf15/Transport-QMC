@@ -24,12 +24,12 @@ class LineSearchState(NamedTuple):
     updates: jnp.ndarray
     v_g_prod: float
 
-def optimize(model, params0, div_name, df=np.Inf, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=10, max_lr=1., nsample=2**10, seed=0, sampler='rqmc'):
+def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=10, max_lr=1., callback=None):
     # X = sample_gaussian(nsample, model.d, seed=seed, sampler=sampler)
-    X = sample_t(nsample, model.d, df=df, seed=seed, sampler=sampler)
+    # X = sample_t(nsample, model.d, df=df, seed=seed, sampler=sampler)
     min_lr = max_lr / (1 << max_backtracking)
 
-    loss_fn = jax.jit(model.divergence, static_argnames=('div_name', ))
+    # loss_fn = jax.jit(model.divergence, static_argnames=('div_name', ))
 
     @jax.jit
     def LS_cond(state: LineSearchState):
@@ -40,7 +40,7 @@ def optimize(model, params0, div_name, df=np.Inf, max_iter=50, max_backtracking=
     def LS_step(state: LineSearchState):
         new_alpha = state.alpha * 0.5
         new_params = tree_add_scalar_mul(state.params, -new_alpha, state.updates)
-        new_loss = loss_fn(new_params, X, div_name)
+        new_loss = loss_fn(new_params)
         state = state._replace(alpha=new_alpha, new_loss=new_loss)
         return state
 
@@ -53,17 +53,21 @@ def optimize(model, params0, div_name, df=np.Inf, max_iter=50, max_backtracking=
     def lbfgs_step(carry, t):
         params, opt_state = carry
         # jax.debug.print("{}", params)
-        loss, grad = jax.value_and_grad(loss_fn)(params, X, div_name)
+        loss, grad = jax.value_and_grad(loss_fn)(params)
         updates, opt_state = opt.update(grad, opt_state, params)
 
         alpha = max_lr
         new_params = tree_add_scalar_mul(params, -alpha, updates)
-        new_loss = loss_fn(new_params, X, div_name)
+        new_loss = loss_fn(new_params)
         init_state = LineSearchState(alpha, new_loss, params, loss, updates, tree_vdot(updates, grad))
         final_state = jax.lax.while_loop(LS_cond, LS_step, init_state)
         params = tree_add_scalar_mul(params, -final_state.alpha, updates)
         # jax.debug.breakpoint()
-        return (params, opt_state), loss_fn(params, X, 'all')
+        if callback is not None:
+            metrics = callback(params)
+        else:
+            metrics = None
+        return (params, opt_state), metrics
 
     carry = (params, opt_state)
     final_state, losses = jax.lax.scan(lbfgs_step, carry, np.arange(max_iter))
