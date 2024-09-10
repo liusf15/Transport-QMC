@@ -16,7 +16,7 @@ MACHINE_EPSILON = np.finfo(np.float64).eps
 
 
 def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3, optimizer='lbfgs', max_iter=50, lr=1e-3, savepath='results'):
-    if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'rosenbrock']:
+    if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'rosenbrock', 'glmm-poisson']:
         data_path = f"qmc_flow/stan_models/{name}.json"
         stan_path = f"qmc_flow/stan_models/{name}.stan"
         target = StanModel(stan_path, data_path)
@@ -34,7 +34,7 @@ def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3,
     soboleng = qmc.Sobol(d, seed=seed)
     U = soboleng.random(nsample)
     U = jnp.array(U * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-
+    model.reverse_kl(params, U)
     loss_fn = jax.jit(lambda params: model.reverse_kl(params, U))
     callback = jax.jit(lambda params: model.metrics(params, U))
     start = time.time()

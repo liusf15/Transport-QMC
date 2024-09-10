@@ -97,7 +97,9 @@ class TransportQMC:
         """
         z, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u) 
         log_p = jax.vmap(self.target.log_prob)(z)
-        return jnp.mean( - log_det - log_p)
+        # log_p = log_p.at[abs(log_p) > 1e15].set(jnp.nan)
+        log_p = jnp.where(jnp.abs(log_p) > 1e15, jnp.nan, log_p)
+        return jnp.nanmean( - log_det - log_p)
     
     def metrics(self, params, u):
         X, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u)
