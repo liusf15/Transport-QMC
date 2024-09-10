@@ -16,7 +16,7 @@ MACHINE_EPSILON = np.finfo(np.float64).eps
 
 
 def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3, optimizer='lbfgs', max_iter=50, lr=1e-3, savepath='results'):
-    if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'rosenbrock', 'glmm-poisson']:
+    if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'rosenbrock', 'glmm-poisson', 'blr']:
         data_path = f"qmc_flow/stan_models/{name}.json"
         stan_path = f"qmc_flow/stan_models/{name}.stan"
         target = StanModel(stan_path, data_path)
@@ -39,7 +39,7 @@ def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3,
     callback = jax.jit(lambda params: model.metrics(params, U))
     start = time.time()
     if optimizer == 'lbfgs':
-        params, logs = lbfgs(loss_fn, params, max_iter=max_iter, callback=callback)
+        params, logs = lbfgs(loss_fn, params, max_iter=max_iter, callback=callback, max_lr=lr)
     else:
         params, logs = sgd(loss_fn, params, max_iter=max_iter, lr=lr, callback=callback)
     end = time.time()
