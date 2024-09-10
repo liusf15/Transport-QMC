@@ -58,7 +58,8 @@ class TransportQMC:
         log_det += jnp.sum(jax.vmap(mixture_beta_log_pdf, in_axes=[0, None, 0])(x, self.shapes, weights))
         x = jax.vmap(mixture_beta_cdf, in_axes=[0, None, 0])(x, self.shapes, weights)
 
-        x = jnp.clip(x, MACHINE_EPSILON * .5, 1 - MACHINE_EPSILON * .5)
+        eps = jnp.finfo(jnp.float32).eps
+        x = jnp.clip(x, eps * .5, 1 - eps * .5)
         log_det += jnp.sum(jnp.log(self.F_inv_grad(x)))
         x = self.F_inv(x)
         return x, log_det
@@ -126,4 +127,16 @@ class TransportQMC:
         if getattr(self.target, 'param_constrain', None):
             X = self.target.param_constrain(np.array(X, float))
         return X, weights
+    
+    def forward_rotation(self, params, x, rot):
+        x = ndtri(x)
+        log_det = jnp.sum(jnp.log(jnp.sqrt(2 * np.pi) * jnp.exp(0.5 * x **2)))
+
+        x = jnp.dot(rot, x)
+
+        for p in params:
+            x, log_det_ = self.forward_one_layer(p, x)
+            log_det += log_det_
+        
+        return x, log_det
     
