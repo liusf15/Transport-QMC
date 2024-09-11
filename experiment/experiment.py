@@ -16,7 +16,7 @@ MACHINE_EPSILON = np.finfo(np.float64).eps
 
 
 def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3, optimizer='lbfgs', max_iter=50, lr=1e-3, savepath='results'):
-    if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'rosenbrock', 'glmm-poisson', 'blr']:
+    if name in ['arK', 'hmm', 'garch', 'arma', 'eight-schools', 'normal-mixture', 'rosenbrock', 'glmm-poisson', 'blr', 'earnings']:
         data_path = f"qmc_flow/stan_models/{name}.json"
         stan_path = f"qmc_flow/stan_models/{name}.stan"
         target = StanModel(stan_path, data_path)
