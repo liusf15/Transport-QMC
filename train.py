@@ -142,31 +142,30 @@ def sgd(loss_fn, params0, max_iter=50, lr=1e-3, callback=None):
     opt = optax.adam(lr)
     opt_state = opt.init(params0)
     params = params0
-    # for it in range(max_iter):
-    #     grad = jax.grad(loss_fn)(params)
-    #     updates, opt_state = opt.update(grad, opt_state, params)
-    #     params = optax.apply_updates(params, updates)
-    #     if callback is not None:
-    #         metrics.append(callback(params))
-    #     else:
-    #         metrics.append(None)
+    best_params = params0
+    best_ess = 0.
     
     @jax_tqdm.scan_tqdm(max_iter)
     def sgd_step(carry, t):
-        params, opt_state = carry
+        params, opt_state, best_params, best_ess = carry
 
         grad = jax.grad(loss_fn)(params)
         updates, opt_state = opt.update(grad, opt_state, params)
         params = optax.apply_updates(params, updates)
         if callback is not None:
             metrics = callback(params)
+            new_best_params, new_best_ess = jax.lax.cond(
+                jnp.isnan(metrics.ess) | (metrics.ess < best_ess),
+                lambda: (best_params, best_ess),  
+                lambda: (params, metrics.ess)  
+    )
         else:
             metrics = None
-        return (params, opt_state), metrics
+        return (params, opt_state, new_best_params, new_best_ess), metrics
 
-    carry = (params, opt_state)
+    carry = (params, opt_state, best_params, best_ess)
     final_state, losses = jax.lax.scan(sgd_step, carry, np.arange(max_iter))
-    return final_state[0], losses
+    return final_state, losses
 
 def optimize_variance(model, params0, offset_logweight, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=10, max_lr=1., nsample=2**10, seed=0, sampler='rqmc'):
     X = sample_gaussian(nsample, model.d, seed=seed, sampler=sampler)
