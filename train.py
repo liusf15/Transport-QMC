@@ -45,13 +45,15 @@ def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, m
         return state
 
     params = params0
+    best_params = params0
+    best_ess = 0.
     
     opt = optax.scale_by_lbfgs(memory_size=memory_size)
     opt_state = opt.init(params)
 
     @jax_tqdm.scan_tqdm(max_iter)
     def lbfgs_step(carry, t):
-        params, opt_state = carry
+        params, opt_state, best_params, best_ess = carry
         # jax.debug.print("{}", params)
         loss, grad = jax.value_and_grad(loss_fn)(params)
         updates, opt_state = opt.update(grad, opt_state, params)
@@ -62,16 +64,21 @@ def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, m
         init_state = LineSearchState(alpha, new_loss, params, loss, updates, tree_vdot(updates, grad))
         final_state = jax.lax.while_loop(LS_cond, LS_step, init_state)
         params = tree_add_scalar_mul(params, -final_state.alpha, updates)
-        # jax.debug.breakpoint()
+        
         if callback is not None:
             metrics = callback(params)
+            new_best_params, new_best_ess = jax.lax.cond(
+                jnp.isnan(metrics.ess) | (metrics.ess < best_ess),
+                lambda: (best_params, best_ess),  
+                lambda: (params, metrics.ess)  
+    )
         else:
             metrics = None
-        return (params, opt_state), metrics
+        return (params, opt_state, new_best_params, new_best_ess), metrics
 
-    carry = (params, opt_state)
+    carry = (params, opt_state, best_params, best_ess)
     final_state, losses = jax.lax.scan(lbfgs_step, carry, np.arange(max_iter))
-    return final_state[0], losses
+    return final_state, losses
     # pbar = trange(max_iter)
     # loss_fn = lambda params, X: model.divergence(params, X, div_name)
     # loss_fn = jax.jit(loss_fn)
