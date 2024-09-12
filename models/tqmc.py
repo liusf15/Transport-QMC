@@ -23,19 +23,28 @@ def mixture_beta_log_pdf(x, shapes, weights):
     return jnp.log(jnp.dot(beta_pdf(x, shapes[:,0], shapes[:, 1]), softmax(weights)))
 
 class TransportQMC:
-    def __init__(self, d, target, base_transform='logit', num_composition=1, max_deg=3):
+    def __init__(self, d, target, base_transform='logit', nonlinearity='logit', num_composition=1, max_deg=3):
         self.d = d
         self.target = target
         if base_transform == 'logit':
+            self.base_transform = logit
+            self.base_transform_grad = lambda x: 1 / (x * (1 - x))
+        elif base_transform == 'normal-icdf':
+            self.base_transform = ndtri
+            self.base_transform_grad = lambda x: jnp.sqrt(2 * np.pi) * jnp.exp(0.5 * ndtri(x)**2)
+        else:
+            raise ValueError(f"'base_transform' must be 'logit' or 'normal-icdf', got {base_transform}")
+        
+        if nonlinearity == 'logit':
             self.F_inv, self.F = logit, sigmoid
             self.F_inv_grad = lambda x: 1 / (x * (1 - x))
             self.F_grad = lambda x: jnp.exp(-x) / (1 + jnp.exp(-x))**2
-        elif base_transform == 'normal-icdf':
+        elif nonlinearity == 'normal-icdf':
             self.F_inv, self.F = ndtri, ndtr
             self.F_inv_grad = lambda x: jnp.sqrt(2 * np.pi) * jnp.exp(0.5 * ndtri(x)**2)
             self.F_grad = lambda x: jnp.exp(-0.5 * x**2) / np.sqrt(2 * np.pi)
         else:
-            raise ValueError(f"'base_transform' must be 'logit' or 'normal-icdf', got {base_transform}")
+            raise ValueError(f"'nonlinearity' must be 'logit' or 'normal-icdf', got {nonlinearity}")
         self.num_composition = num_composition
         self.max_deg = max_deg
         self.shapes = np.array([degs for degs in itertools.product(np.arange(1, self.max_deg), repeat=2) if sum(degs) <= self.max_deg])
@@ -83,8 +92,9 @@ class TransportQMC:
     def forward(self, params, x):
         # log_det = jnp.sum(jnp.log(self.F_inv_grad(x)))
         # x = self.F_inv(x)
-        x = ndtri(x)
-        log_det = jnp.sum(jnp.log(jnp.sqrt(2 * np.pi) * jnp.exp(0.5 * x **2)))
+        log_det = jnp.sum(jnp.log(self.base_transform_grad(x)))
+        x = self.base_transform(x)
+        # log_det = jnp.sum(jnp.log(jnp.sqrt(2 * np.pi) * jnp.exp(0.5 * x **2)))
 
         for p in params:
             x, log_det_ = self.forward_one_layer(p, x)
@@ -105,7 +115,7 @@ class TransportQMC:
         X, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u)
         log_p = jax.vmap(self.target.log_prob)(X)
         log_weights = log_p + log_det
-        offset = jnp.mean(log_weights)
+        offset = jnp.max(log_weights)
         weights = jnp.exp(log_weights - offset)
         ess = jnp.sum(weights)**2 / jnp.sum(weights**2)
         chisq = logsumexp(2 * (log_weights - offset)) - jnp.log(len(log_weights)) + 2 * offset

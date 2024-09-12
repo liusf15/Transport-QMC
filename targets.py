@@ -109,7 +109,7 @@ class BayesianLogisticRegression:
     def __init__(self, X, y, prior_scale=1.0):
         self.d = X.shape[1]
         self.X = X
-        self.y = y
+        self.y = y # 1 or 0
         self.prior_scale = prior_scale
 
     def log_prob(self, w):

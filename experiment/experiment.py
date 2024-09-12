@@ -7,7 +7,7 @@ import time
 import jax
 import jax.numpy as jnp
 from scipy.stats import qmc
-from qmc_flow.targets import StanModel, Gaussian
+from qmc_flow.targets import StanModel, Gaussian, BayesianLogisticRegression
 from qmc_flow.models.tqmc import TransportQMC
 from qmc_flow.train import lbfgs, sgd
 from qmc_flow.utils import get_moments
@@ -21,6 +21,13 @@ def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3,
         mean = jnp.zeros(d)
         cov = (jnp.ones((d, d)) * 0.5 + jnp.eye(d) * 0.5) * 2.
         target = Gaussian(mean, cov)
+    elif name == 'logistic':
+        d = 5
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((20, d))
+        beta = rng.random(d) * 2 - 1
+        y = rng.binomial(1, 1 / (1 + np.exp(-jnp.dot(X, beta))))
+        target = BayesianLogisticRegression(X, y, prior_scale=1.)
     else:
         data_path = f"qmc_flow/stan_models/{name}.json"
         stan_path = f"qmc_flow/stan_models/{name}.stan"
@@ -28,18 +35,18 @@ def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3,
         
     d = target.d
 
-    model = TransportQMC(d, target, base_transform='logit', num_composition=num_composition, max_deg=max_deg)
+    model = TransportQMC(d, target, base_transform='normal-icdf', nonlinearity='logit', num_composition=num_composition, max_deg=max_deg)
     params = model.init_params()
     
     soboleng = qmc.Sobol(d, seed=seed)
     U = soboleng.random(nsample)
     U = jnp.array(U * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-    model.reverse_kl(params, U)
     loss_fn = jax.jit(lambda params: model.reverse_kl(params, U))
 
     U_val = soboleng.random(nsample)
     U_val = jnp.array(U_val * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-    callback = jax.jit(lambda params: model.metrics(params, U_val)) # try different U
+    callback = jax.jit(lambda params: model.metrics(params, U_val))
+
     start = time.time()
     if optimizer == 'lbfgs':
         final_state, logs = lbfgs(loss_fn, params, max_iter=max_iter, callback=callback, max_lr=lr)
