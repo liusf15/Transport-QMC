@@ -14,6 +14,26 @@ Metrics = NamedTuple('Metrics', [('rkl', float), ('fkl', float), ('chisq', float
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
+@jax.custom_vjp
+def custom_nanmean(x):
+    mask = ~jnp.isnan(x)
+    x_clean = jnp.where(mask, x, 0.0)
+    return jnp.sum(x_clean) / jnp.sum(mask)
+
+# Forward and backward pass for custom_nanmean
+def custom_nanmean_fwd(x):
+    mask = ~jnp.isnan(x)
+    x_clean = jnp.where(mask, x, 0.0)
+    nanmean = jnp.sum(x_clean) / jnp.sum(mask)
+    return nanmean, (x_clean, mask)
+
+def custom_nanmean_bwd(res, g):
+    x_clean, mask = res
+    grad_clean = g / jnp.sum(mask)
+    return (jnp.where(mask, grad_clean, 0.0),)
+
+# Register the custom forward and backward functions
+custom_nanmean.defvjp(custom_nanmean_fwd, custom_nanmean_bwd)
 
 
 def mixture_beta_cdf(x, shapes, weights):
@@ -108,19 +128,28 @@ class TransportQMC:
         z, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u) 
         log_p = jax.vmap(self.target.log_prob)(z)
         # log_p = log_p.at[abs(log_p) > 1e15].set(jnp.nan)
-        log_p = jnp.where(jnp.abs(log_p) > 1e15, jnp.nan, log_p)
+        # log_p = jnp.where(jnp.abs(log_p) > 1e15, jnp.nan, log_p)
+        # log_weight = log_p + log_det
+        # mask = ~jnp.isnan(log_weight)
+        # log_weight = jnp.where(mask, log_weight, 0.0)
+        # return jnp.sum(-log_weight) / jnp.sum(mask)
         return jnp.nanmean( - log_det - log_p)
     
     def metrics(self, params, u):
         X, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u)
         log_p = jax.vmap(self.target.log_prob)(X)
         log_weights = log_p + log_det
-        offset = jnp.max(log_weights)
+        
+        offset = jnp.nanmax(log_weights)
         weights = jnp.exp(log_weights - offset)
-        ess = jnp.sum(weights)**2 / jnp.sum(weights**2)
-        chisq = logsumexp(2 * (log_weights - offset)) - jnp.log(len(log_weights)) + 2 * offset
-        rkl = jnp.mean(- log_weights)
-        fkl = logsumexp(log_weights, b=log_weights - offset) + offset * logsumexp(log_weights)
+        rkl = jnp.nanmean(- log_weights)
+        ess = jnp.nansum(weights)**2 / jnp.nansum(weights**2)
+
+        mask = ~jnp.isnan(log_weights)
+        log_weights = jnp.where(mask, log_weights, -jnp.inf)
+        log_weights_0 = jnp.where(mask, log_weights, 0.)
+        chisq = logsumexp(2 * log_weights) - jnp.log(len(log_weights))
+        fkl = logsumexp(log_weights, b=log_weights_0)
 
         return Metrics(rkl, fkl, chisq, ess)
 
@@ -134,7 +163,7 @@ class TransportQMC:
         proposal_log_densities = - log_det
         target_log_densities = jax.vmap(self.target.log_prob)(X)
         log_weights = target_log_densities - proposal_log_densities
-        log_weights -= np.mean(log_weights)
+        log_weights -= np.nanmean(log_weights)
         weights = np.exp(log_weights)
         if getattr(self.target, 'param_constrain', None):
             X = self.target.param_constrain(np.array(X, float))

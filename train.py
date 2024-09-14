@@ -24,7 +24,7 @@ class LineSearchState(NamedTuple):
     updates: jnp.ndarray
     v_g_prod: float
 
-def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=10, max_lr=1., callback=None):
+def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=20, max_lr=1., callback=None):
     # X = sample_gaussian(nsample, model.d, seed=seed, sampler=sampler)
     # X = sample_t(nsample, model.d, df=df, seed=seed, sampler=sampler)
     min_lr = max_lr / (1 << max_backtracking)

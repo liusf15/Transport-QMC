@@ -166,6 +166,8 @@ class Posterior:
     def log_density(self, x):
         try:
             log_density = self.bsmodel.log_density(x)
+            if jnp.abs(log_density) > 1e15:
+                return jnp.nan
             return log_density
         except:
             return jnp.nan
@@ -173,9 +175,11 @@ class Posterior:
     def log_density_gradient(self, x):
         try:
             log_density, gradient = self.bsmodel.log_density_gradient(x)
+            if jnp.abs(log_density) > 1e15 or jnp.isnan(gradient).any():
+                return jnp.nan, jnp.zeros(x.shape)
             return log_density, gradient
         except:
-            return -jnp.nan, jnp.ones(x.shape) * jnp.nan
+            return jnp.nan, jnp.zeros(x.shape) 
         # if np.isnan(log_density) or np.isnan(gradient).any():
         #     raise ValueError(f"NaN values in log density or gradient at {x}")
 
@@ -233,10 +237,10 @@ class StanModel:
         self.log_prob_jax = make_logdensity_fn(self.stan_model)
     
     def log_prob(self, x):
-        try:
-            return self.log_prob_jax(x)
-        except:
-            return -jnp.nan
+        # try:
+        return self.log_prob_jax(x)
+        # except:
+        #     return jnp.nan
     
     def param_constrain(self, x):
         if x.ndim == 1:

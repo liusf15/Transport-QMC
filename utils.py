@@ -1,7 +1,9 @@
 import numpy as np
 from scipy.special import ndtri, stdtrit
 from scipy.stats import qmc
-from scipy.stats import multivariate_t, mvn
+from scipy.stats import multivariate_t
+import matplotlib.pyplot as plt
+
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
 def sample_gaussian(nsample, d, seed=0, sampler='rqmc'):
@@ -54,3 +56,23 @@ def get_mse(true_moments, est_moments):
     mse_1 = np.mean((true_moments[0] - est_moments[0])**2)
     mse_2 = np.mean((true_moments[1] - est_moments[1])**2)
     return mse_1, mse_2
+
+def make_heatmap(target, i1=0, i2=1):
+    grid_size = 200
+    d = target.d
+    zz = np.zeros(grid_size**2, d)
+    xx, yy = np.meshgrid(np.linspace(-3, 3, grid_size), np.linspace(-3, 3, grid_size))
+    zz[:, [i1, i2]] = np.concatenate([xx.unsqueeze(2), yy.unsqueeze(2)], 2).view(-1, 2)
+
+    true_log_prob = target.log_prob(zz)
+    true_prob = np.exp(true_log_prob.reshape(xx.shape))
+    true_prob[np.isnan(true_prob)] = 0
+    true_prob = true_prob / true_prob.sum() * (1 / (xx[1] - xx[0])**2)
+
+    fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+    ax[0].pcolormesh(xx.numpy(), yy.numpy(), true_prob.data.numpy(), cmap='coolwarm', linewidth=0, rasterized=True)
+    ax[0].set_title('Target')
+    ax[0].set_xlabel('Dimension ' + str(i1))
+    ax[0].set_ylabel('Dimension ' + str(i2))
+    return fig, ax
+
