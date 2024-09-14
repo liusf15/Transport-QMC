@@ -14,28 +14,6 @@ Metrics = NamedTuple('Metrics', [('rkl', float), ('fkl', float), ('chisq', float
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
-@jax.custom_vjp
-def custom_nanmean(x):
-    mask = ~jnp.isnan(x)
-    x_clean = jnp.where(mask, x, 0.0)
-    return jnp.sum(x_clean) / jnp.sum(mask)
-
-# Forward and backward pass for custom_nanmean
-def custom_nanmean_fwd(x):
-    mask = ~jnp.isnan(x)
-    x_clean = jnp.where(mask, x, 0.0)
-    nanmean = jnp.sum(x_clean) / jnp.sum(mask)
-    return nanmean, (x_clean, mask)
-
-def custom_nanmean_bwd(res, g):
-    x_clean, mask = res
-    grad_clean = g / jnp.sum(mask)
-    return (jnp.where(mask, grad_clean, 0.0),)
-
-# Register the custom forward and backward functions
-custom_nanmean.defvjp(custom_nanmean_fwd, custom_nanmean_bwd)
-
-
 def mixture_beta_cdf(x, shapes, weights):
     return jnp.dot(betainc(shapes[:,0], shapes[:, 1], x), softmax(weights))
 
@@ -110,11 +88,8 @@ class TransportQMC:
         return x, log_det
 
     def forward(self, params, x):
-        # log_det = jnp.sum(jnp.log(self.F_inv_grad(x)))
-        # x = self.F_inv(x)
         log_det = jnp.sum(jnp.log(self.base_transform_grad(x)))
         x = self.base_transform(x)
-        # log_det = jnp.sum(jnp.log(jnp.sqrt(2 * np.pi) * jnp.exp(0.5 * x **2)))
 
         for p in params:
             x, log_det_ = self.forward_one_layer(p, x)
@@ -127,12 +102,6 @@ class TransportQMC:
         """
         z, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u) 
         log_p = jax.vmap(self.target.log_prob)(z)
-        # log_p = log_p.at[abs(log_p) > 1e15].set(jnp.nan)
-        # log_p = jnp.where(jnp.abs(log_p) > 1e15, jnp.nan, log_p)
-        # log_weight = log_p + log_det
-        # mask = ~jnp.isnan(log_weight)
-        # log_weight = jnp.where(mask, log_weight, 0.0)
-        # return jnp.sum(-log_weight) / jnp.sum(mask)
         return jnp.nanmean( - log_det - log_p)
     
     def metrics(self, params, u):
