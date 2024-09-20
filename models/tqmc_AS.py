@@ -32,24 +32,23 @@ class TransportQMC_AS(TransportQMC):
         weights = weights.at[:, 0].set(1.)
         return {'weights': weights, 'L': jnp.zeros(self.r * (self.r + 1) // 2), 'D': jnp.zeros(self.d - self.r), 'b': jnp.zeros(self.d)}
 
-    def init_params(self):
-        params = []
-        for _ in range(self.num_composition):
-            params.append(self.init_one_layer())
-        return params
+    # def init_params(self):
+    #     params = []
+    #     for _ in range(self.num_composition):
+    #         params.append(self.init_one_layer())
+    #     return params
 
     def elementwise(self, weights, x):
-        log_det = jnp.sum(jnp.log(self.F_grad(x[:self.r])))
-        y = self.F(x[:self.r])
+        log_det = jnp.sum(jnp.log(self.F_grad(x)))
+        x = self.F(x)
         
-        log_det += jnp.sum(jax.vmap(mixture_beta_log_pdf, in_axes=[0, None, 0])(y, self.shapes, weights))
-        y = jax.vmap(mixture_beta_cdf, in_axes=[0, None, 0])(y, self.shapes, weights)
+        log_det += jnp.sum(jax.vmap(mixture_beta_log_pdf, in_axes=[0, None, 0])(x, self.shapes, weights))
+        x = jax.vmap(mixture_beta_cdf, in_axes=[0, None, 0])(x, self.shapes, weights)
 
         eps = jnp.finfo(jnp.float32).eps
-        y = jnp.clip(y, eps * .5, 1 - eps * .5)
-        log_det += jnp.sum(jnp.log(self.F_inv_grad(y)))
-        y = self.F_inv(y)
-        x = x.at[:self.r].set(y)
+        x = jnp.clip(x, eps * .5, 1 - eps * .5)
+        log_det += jnp.sum(jnp.log(self.F_inv_grad(x)))
+        x = self.F_inv(x)
         return x, log_det
     
     def forward_one_layer(self, params, x):
@@ -73,14 +72,14 @@ class TransportQMC_AS(TransportQMC):
         x = jnp.concatenate([y, z])
         return x, log_det
 
-    def forward(self, params, x):
-        log_det = jnp.sum(jnp.log(self.base_transform_grad(x)))
-        x = self.base_transform(x)
+    # def forward(self, params, x):
+    #     log_det = jnp.sum(jnp.log(self.base_transform_grad(x)))
+    #     x = self.base_transform(x)
 
-        for p in params:
-            x, log_det_ = self.forward_one_layer(p, x)
-            log_det += log_det_
-        return x, log_det
+    #     for p in params:
+    #         x, log_det_ = self.forward_one_layer(p, x)
+    #         log_det += log_det_
+    #     return x, log_det
 
     def reverse_kl(self, params, u):
         """
