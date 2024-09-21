@@ -31,12 +31,11 @@ class TransportQMC_AS(TransportQMC):
         weights = jnp.zeros((self.r, len(self.shapes)))
         weights = weights.at[:, 0].set(1.)
         return {'weights': weights, 'L': jnp.zeros(self.r * (self.r + 1) // 2), 'D': jnp.zeros(self.d - self.r), 'b': jnp.zeros(self.d)}
-
-    # def init_params(self):
-    #     params = []
-    #     for _ in range(self.num_composition):
-    #         params.append(self.init_one_layer())
-    #     return params
+    
+    def init_params(self):
+        weights = jnp.zeros((self.r, len(self.shapes)))
+        weights = weights.at[:, 0].set(1.)
+        params = {'weights': weights, 'L': jnp.zeros(self.r * (self.r + 1) // 2), 'D': jnp.zeros(self.d - self.r), 'b': jnp.zeros(self.d)}
 
     def elementwise(self, weights, x):
         log_det = jnp.sum(jnp.log(self.F_grad(x)))
@@ -71,15 +70,6 @@ class TransportQMC_AS(TransportQMC):
 
         x = jnp.concatenate([y, z])
         return x, log_det
-
-    # def forward(self, params, x):
-    #     log_det = jnp.sum(jnp.log(self.base_transform_grad(x)))
-    #     x = self.base_transform(x)
-
-    #     for p in params:
-    #         x, log_det_ = self.forward_one_layer(p, x)
-    #         log_det += log_det_
-    #     return x, log_det
 
     def reverse_kl(self, params, u):
         """
