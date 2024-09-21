@@ -11,17 +11,19 @@ from jax.scipy.special import logsumexp, ndtri, ndtr
 from scipy.stats import qmc
 from qmc_flow.targets import StanModel, Gaussian, BayesianLogisticRegression
 from qmc_flow.models.tqmc_AS import TransportQMC_AS
+from qmc_flow.models.tqmc import TransportQMC
 from qmc_flow.train import lbfgs, sgd
 from qmc_flow.utils import get_moments, sample_gaussian
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
-d = 5
+d = 100
 rng = np.random.default_rng(0)
-rho = 0.9
-cov_X = scipy.linalg.toeplitz(rho ** np.arange(d))
+rho = 0.7
+# cov_X = scipy.linalg.toeplitz(rho ** np.arange(d))
+cov_X = np.eye(d) * (1 - rho) + rho
 chol_X = np.linalg.cholesky(cov_X)
-X = rng.standard_normal((100, d)) @ chol_X.T
+X = rng.standard_normal((20, d)) @ chol_X.T
 beta = rng.random(d) * 2 - 1
 y = rng.binomial(1, 1 / (1 + np.exp(-jnp.dot(X, beta))))
 target = BayesianLogisticRegression(X, y, prior_scale=1.)
@@ -35,8 +37,8 @@ eigval = eigval[::-1]
 eigvec = eigvec[:, ::-1]
 
 var_explained = np.cumsum(eigval) / np.sum(eigval)
-# r = np.where(var_explained > 0.99)[0][0] + 1 # rank
-r = 2
+r = np.where(var_explained > 0.95)[0][0] + 1 # rank
+print('Rank', r)
 V = eigvec[:]
 V_r = eigvec[:, :r]
 P_r = V_r @ V_r.T
@@ -46,32 +48,21 @@ V_orth = eigvec[:, r:]
 soboleng = qmc.Sobol(d, seed=1)
 U = soboleng.random(2**6)
 U = jnp.array(U * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-# X = ndtri(U)
-# X = X @ V.T
-# jax.vmap(target.log_prob)(X)
 
+# model = TransportQMC(d, target, base_transform='normal-icdf', nonlinearity='logit', num_composition=1, max_deg=3)
 
-# class RotatedTarget:
-#     def __init__(self, target, V):
-#         self.target = target
-#         self.V = V
+model_as = TransportQMC_AS(d, r, V, target, base_transform='normal-icdf', nonlinearity='logit', num_composition=2, max_deg=5)
+# TODO: no need to apply composition for the not important variables 
+params = model_as.init_params()
 
-#     def log_prob(self, y):
-#         return self.target.log_prob(self.V @ y)
-
-# rot_target = RotatedTarget(target, V.T)
-
-model = TransportQMC_AS(d, r, np.eye(d), target, base_transform='normal-icdf', nonlinearity='logit', num_composition=1, max_deg=3)
-params = model.init_params()
-
-loss_fn = jax.jit(lambda params: model.reverse_kl(params, U))
+loss_fn = jax.jit(lambda params: model_as.reverse_kl(params, U))
 
 U_val = soboleng.random(2**6)
 U_val = jnp.array(U_val * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
-callback = jax.jit(lambda params: model.metrics(params, U_val))
+callback = jax.jit(lambda params: model_as.metrics(params, U_val))
 
 optimizer = 'lbfgs'
-max_iter = 50
+max_iter = 200
 lr = 1.
 start = time.time()
 if optimizer == 'lbfgs':
