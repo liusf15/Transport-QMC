@@ -1,2 +1,3 @@
 result/
 *.so
+stan_models/
