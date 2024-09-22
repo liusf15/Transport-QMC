@@ -30,43 +30,57 @@ class TransportQMC_AS(TransportQMC):
     def init_one_layer(self):
         weights = jnp.zeros((self.r, len(self.shapes)))
         weights = weights.at[:, 0].set(1.)
-        return {'weights': weights, 'L': jnp.zeros(self.r * (self.r + 1) // 2), 'D': jnp.zeros(self.d - self.r), 'b': jnp.zeros(self.d)}
+        return {'weights': weights, 'L': jnp.zeros(self.r * (self.r + 1) // 2), 'b': jnp.zeros(self.r)}
     
     def init_params(self):
-        weights = jnp.zeros((self.r, len(self.shapes)))
-        weights = weights.at[:, 0].set(1.)
-        params = {'weights': weights, 'L': jnp.zeros(self.r * (self.r + 1) // 2), 'D': jnp.zeros(self.d - self.r), 'b': jnp.zeros(self.d)}
+        params_inactive = {'D': jnp.zeros(self.d - self.r), 'b': jnp.zeros(self.d - self.r)} 
+        # weights = jnp.zeros((self.r, len(self.shapes)))
+        # weights = weights.at[:, 0].set(1.)
+        params_active = [self.init_one_layer() for _ in range(self.num_composition)]
+        return {'active': params_active, 'inactive': params_inactive}
 
-    def elementwise(self, weights, x):
-        log_det = jnp.sum(jnp.log(self.F_grad(x)))
-        x = self.F(x)
+    # def elementwise(self, weights, x):
+    #     log_det = jnp.sum(jnp.log(self.F_grad(x)))
+    #     x = self.F(x)
         
-        log_det += jnp.sum(jax.vmap(mixture_beta_log_pdf, in_axes=[0, None, 0])(x, self.shapes, weights))
-        x = jax.vmap(mixture_beta_cdf, in_axes=[0, None, 0])(x, self.shapes, weights)
+    #     log_det += jnp.sum(jax.vmap(mixture_beta_log_pdf, in_axes=[0, None, 0])(x, self.shapes, weights))
+    #     x = jax.vmap(mixture_beta_cdf, in_axes=[0, None, 0])(x, self.shapes, weights)
 
-        eps = jnp.finfo(jnp.float32).eps
-        x = jnp.clip(x, eps * .5, 1 - eps * .5)
-        log_det += jnp.sum(jnp.log(self.F_inv_grad(x)))
-        x = self.F_inv(x)
-        return x, log_det
+    #     eps = jnp.finfo(jnp.float32).eps
+    #     x = jnp.clip(x, eps * .5, 1 - eps * .5)
+    #     log_det += jnp.sum(jnp.log(self.F_inv_grad(x)))
+    #     x = self.F_inv(x)
+    #     return x, log_det
     
-    def forward_one_layer(self, params, x):
+    def forward_one_layer(self, params, y):
         weights = params['weights']
         
         L_r = jnp.diag(jnp.exp(params['L'][:self.r]))
         mask = np.tri(self.r, k=-1, dtype=bool)
         L_r = L_r.at[mask].set(params['L'][self.r:])
         b = params['b']        
-        D = jnp.exp(params['D'])
+
         # linear
-        y = jnp.dot(L_r, x[:self.r]) + b[:self.r]
-        z = D * x[self.r:] + b[self.r:]
-        
-        log_det = jnp.sum(params['L'][:self.d]) + jnp.sum(params['D'])
+        y = jnp.dot(L_r, y) + b
+        log_det = jnp.sum(params['L'][:self.r])
 
         # elementwise transform
         y, log_det_T = self.elementwise(weights, y)
         log_det += log_det_T
+        return y, log_det
+
+    def forward(self, params, x):
+        log_det = jnp.sum(jnp.log(self.base_transform_grad(x)))
+        x = self.base_transform(x)
+
+        y = x[:self.r]
+        for p in params['active']:
+            y, log_det_ = self.forward_one_layer(p, y)
+            log_det += log_det_
+
+        z = x[self.r:]
+        z = jnp.exp(params['inactive']['D']) * z + params['inactive']['b']   
+        log_det += jnp.sum(params['inactive']['D'])
 
         x = jnp.concatenate([y, z])
         return x, log_det
@@ -105,6 +119,7 @@ class TransportQMC_AS(TransportQMC):
         X = soboleng.random(nsample) * (1 - MACHINE_EPSILON) + MACHINE_EPSILON * .5
         X, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, X)
         proposal_log_densities = - log_det
+        X = X @ self.V.T
         target_log_densities = jax.vmap(self.target.log_prob)(X)
         log_weights = target_log_densities - proposal_log_densities
         log_weights -= np.nanmean(log_weights)
