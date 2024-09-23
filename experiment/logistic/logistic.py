@@ -1,5 +1,6 @@
 import os
 import argparse
+import itertools
 import pandas as pd
 import numpy as np
 import jax.numpy as jnp
@@ -23,10 +24,11 @@ def get_ref_moments(d, N, cov_x, rho):
     moments_2 = res['moments_2']
     return np.mean(moments_1, axis=0), np.mean(moments_2, axis=0)
 
-def get_best_params(path, d, N, cov_x, rho, nsample, num_composition, max_deg, max_iter):
+def get_best_params(path, d, N, cov_x, rho, nsample, optimizer, num_composition, max_deg, max_iter, lr):
     max_ess = -1
-    for seed in range(10):
-        filename = os.path.join(path, f'logistic_d_{d}_N_{N}_{cov_x}_{rho}_n_{nsample}_comp_{num_composition}_deg_{max_deg}_lbfgs_iter_{max_iter}_lr_1.0_{seed}.pkl')
+    best_setting = None
+    for seed, num_comp, deg, iter, lr in itertools.product(range(10), num_composition, max_deg, max_iter, lr):
+        filename = os.path.join(path, f'logistic_d_{d}_N_{N}_{cov_x}_{rho}_n_{nsample}_comp_{num_comp}_deg_{deg}_{optimizer}_iter_{iter}_lr_{lr}_{seed}.pkl')
         if not os.path.exists(filename):
             continue
         with open(filename, 'rb') as f:
@@ -36,12 +38,13 @@ def get_best_params(path, d, N, cov_x, rho, nsample, num_composition, max_deg, m
             params = res['params']
             r = res['r']
             V = res['V']
+            best_setting = (num_comp, deg, iter, lr, seed)
     print(f'Best ESS: {max_ess}')
-    return params, r, V
+    print("num_composition, max_deg, max_iter, lr, seed")
+    print(best_setting)
+    return params, r, V, best_setting[0], best_setting[1]
 
-
-def run_experiment(d, N, cov_x, seed=0, ntrain=64, train_date='2024-09-22', num_composition=1, max_deg=3, max_iter=200, savepath='results'):
-    
+def run_experiment(d, N, cov_x, seed=0, ntrain=64, train_date='2024-09-22', savepath='results'):
     rng = np.random.default_rng(0)
     if cov_x == 'equi':
         rho = 0.7
@@ -61,7 +64,7 @@ def run_experiment(d, N, cov_x, seed=0, ntrain=64, train_date='2024-09-22', num_
 
     rootdir = '/mnt/ceph/users/sliu1/normalizing_flows/qmc_flow'
     path = os.path.join(rootdir, train_date, 'logistic')
-    params, r, V = get_best_params(path, d, N, cov_x, rho, nsample=ntrain, num_composition=num_composition, max_deg=max_deg, max_iter=max_iter)
+    params, r, V, num_composition, max_deg = get_best_params(path, d, N, cov_x, rho, nsample=ntrain, optimizer='sgd', num_composition=[3, 5], max_deg=[5, 7], max_iter=[500, 1000], lr=[0.1, 0.05, 0.01, 0.001])
     model = TransportQMC_AS(d, r, V, target, base_transform='normal-icdf', nonlinearity='logit', num_composition=num_composition, max_deg=max_deg)
 
 
@@ -99,30 +102,35 @@ def run_experiment(d, N, cov_x, seed=0, ntrain=64, train_date='2024-09-22', num_
     m_list = np.arange(3, 16)
     rng = np.random.default_rng(2024+seed)
     mse = {}
+    mse_IS = {}
     moments_1 = {}
     moments_2 = {}
+    moments_1_IS = {}
+    moments_2_IS = {}
 
     for m in m_list:
         print(m)
-        # MC
-        U = sample_uniform(2**m, d, rng, 'mc')
-        X, weights = get_samples(U)
-        moment_1, moment_2 = get_moments(X, weights)
-        moments_1[('mc', m, seed)], moments_2[('mc', m, seed)] = moment_1, moment_2
-        mse[('mc', m, seed)] = get_mse(moment_1, moment_2)
+        for sampler in ['mc', 'rqmc']:
+            U = sample_uniform(2**m, d, rng, sampler)
+            X, weights = get_samples(U)
+            # IS
+            moment_1, moment_2 = get_moments(X, weights)
+            moments_1_IS[(sampler, m, seed)], moments_2_IS[(sampler, m, seed)] = moment_1, moment_2
+            mse_IS[(sampler, m, seed)] = get_mse(moment_1, moment_2)
 
-        # RQMC
-        U = sample_uniform(2**m, d, rng, 'rqmc')
-        X, weights = get_samples(U)
-        moment_1, moment_2 = get_moments(X, weights)
-        moments_1[('rqmc', m, seed)], moments_2[('rqmc', m, seed)] = moment_1, moment_2
-        mse[('rqmc', m, seed)] = get_mse(moment_1, moment_2)
+            # no IS
+            moment_1, moment_2 = get_moments(X, np.ones_like(weights))
+            moments_1[(sampler, m, seed)], moments_2[(sampler, m, seed)] = moment_1, moment_2
+            mse[(sampler, m, seed)] = get_mse(moment_1, moment_2)
     
-    filename = os.path.join(savepath, f'{cov_x}_d_{d}_N_{N}_ntrain_{ntrain}_comp_{num_composition}_deg_{max_deg}_iter_{max_iter}_seed_{seed}.pkl')
+    filename = os.path.join(savepath, f'{cov_x}_d_{d}_N_{N}_ntrain_{ntrain}_sweeping_seed_{seed}.pkl')
     mse = pd.DataFrame(mse).T.reset_index(names=['sampler', 'm', 'seed'])
     moments_1 = pd.DataFrame(moments_1).T.reset_index(names=['sampler', 'm', 'seed'])
     moments_2 = pd.DataFrame(moments_2).T.reset_index(names=['sampler', 'm', 'seed'])
-    results = {'mse': mse, 'moments_1': moments_1, 'moments_2': moments_2}
+    moments_1_IS = pd.DataFrame(moments_1_IS).T.reset_index(names=['sampler', 'm', 'seed'])
+    moments_2_IS = pd.DataFrame(moments_2_IS).T.reset_index(names=['sampler', 'm', 'seed'])
+    mse_IS = pd.DataFrame(mse_IS).T.reset_index(names=['sampler', 'm', 'seed'])
+    results = {'mse': mse, 'moments_1': moments_1, 'moments_2': moments_2, 'mse_IS': mse_IS, 'moments_1_IS': moments_1_IS, 'moments_2_IS': moments_2_IS}
     with open(filename, 'wb') as f:
         pickle.dump(results, f)
     print('saved to', filename)
@@ -135,13 +143,13 @@ if __name__ == '__main__':
     argparser.add_argument('--cov_x', type=str, default='equi')
     argparser.add_argument('--seed', type=int, default=0)
     argparser.add_argument('--ntrain', type=int, default=64)
-    argparser.add_argument('--num_composition', type=int, default=1)
-    argparser.add_argument('--max_deg', type=int, default=3)
-    argparser.add_argument('--max_iter', type=int, default=200)
+    # argparser.add_argument('--num_composition', type=int, default=1)
+    # argparser.add_argument('--max_deg', type=int, default=3)
+    # argparser.add_argument('--max_iter', type=int, default=200)
     argparser.add_argument('--rootdir', type=str, default='experiment/results')
 
     args = argparser.parse_args()
 
     savepath = os.path.join(args.rootdir, args.date, 'logistic', 'mse')
     os.makedirs(savepath, exist_ok=True)
-    run_experiment(args.d, args.N, args.cov_x, seed=args.seed, ntrain=args.ntrain, train_date='2024-09-22', num_composition=args.num_composition, max_deg=args.max_deg, max_iter=args.max_iter, savepath=savepath)
+    run_experiment(args.d, args.N, args.cov_x, seed=args.seed, ntrain=args.ntrain, train_date='2024-09-22', savepath=savepath)
