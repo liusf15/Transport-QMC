@@ -34,23 +34,8 @@ class TransportQMC_AS(TransportQMC):
     
     def init_params(self):
         params_inactive = {'D': jnp.zeros(self.d - self.r), 'b': jnp.zeros(self.d - self.r)} 
-        # weights = jnp.zeros((self.r, len(self.shapes)))
-        # weights = weights.at[:, 0].set(1.)
         params_active = [self.init_one_layer() for _ in range(self.num_composition)]
         return {'active': params_active, 'inactive': params_inactive}
-
-    # def elementwise(self, weights, x):
-    #     log_det = jnp.sum(jnp.log(self.F_grad(x)))
-    #     x = self.F(x)
-        
-    #     log_det += jnp.sum(jax.vmap(mixture_beta_log_pdf, in_axes=[0, None, 0])(x, self.shapes, weights))
-    #     x = jax.vmap(mixture_beta_cdf, in_axes=[0, None, 0])(x, self.shapes, weights)
-
-    #     eps = jnp.finfo(jnp.float32).eps
-    #     x = jnp.clip(x, eps * .5, 1 - eps * .5)
-    #     log_det += jnp.sum(jnp.log(self.F_inv_grad(x)))
-    #     x = self.F_inv(x)
-    #     return x, log_det
     
     def forward_one_layer(self, params, y):
         weights = params['weights']
