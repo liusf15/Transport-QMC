@@ -106,7 +106,7 @@ class TransportQMC_AS(TransportQMC):
         mask = ~jnp.isnan(log_weights)
         log_weights = jnp.where(mask, log_weights, -jnp.inf)
         log_weights_0 = jnp.where(mask, log_weights, 0.)
-        chisq = logsumexp(2 * log_weights) - jnp.log(len(log_weights))
+        chisq = (logsumexp(2 * log_weights) - jnp.log(len(log_weights))) * .5
         fkl = logsumexp(log_weights, b=log_weights_0)
 
         return Metrics(rkl, fkl, chisq, ess)
