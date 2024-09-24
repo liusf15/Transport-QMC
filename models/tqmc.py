@@ -10,7 +10,7 @@ import jax
 
 from typing import NamedTuple
 
-Metrics = NamedTuple('Metrics', [('rkl', float), ('fkl', float), ('chisq', float), ('ess', float)])
+Metrics = NamedTuple('Metrics', [('rkl', float), ('fkl', float), ('chisq', float), ('reg_rkl', float), ('ess', float)])
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
@@ -104,6 +104,14 @@ class TransportQMC:
         log_p = jax.vmap(self.target.log_prob)(z)
         return jnp.nanmean( - log_det - log_p)
     
+    def reg_kl(self, params, lbd, u):
+        z, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u) 
+        log_p = jax.vmap(self.target.log_prob)(z)
+        log_weights = log_p + log_det
+        rkl = jnp.nanmean(- log_weights)
+        chisq = 0.5 * (logsumexp(2 * log_weights) - jnp.log(len(log_weights)))
+        return rkl + lbd * chisq
+    
     def metrics(self, params, u):
         X, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u)
         log_p = jax.vmap(self.target.log_prob)(X)
@@ -117,10 +125,10 @@ class TransportQMC:
         mask = ~jnp.isnan(log_weights)
         log_weights = jnp.where(mask, log_weights, -jnp.inf)
         log_weights_0 = jnp.where(mask, log_weights, 0.)
-        chisq = logsumexp(2 * log_weights) - jnp.log(len(log_weights))
+        chisq = (logsumexp(2 * log_weights) - jnp.log(len(log_weights))) * .5
         fkl = logsumexp(log_weights, b=log_weights_0)
-
-        return Metrics(rkl, fkl, chisq, ess)
+        reg_rkl = rkl + chisq
+        return Metrics(rkl, fkl, chisq, reg_rkl, ess)
 
     def sample(self, params, nsample, seed=0):
         """
