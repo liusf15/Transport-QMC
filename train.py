@@ -25,12 +25,7 @@ class LineSearchState(NamedTuple):
     v_g_prod: float
 
 def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=20, max_lr=1., callback=None):
-    # X = sample_gaussian(nsample, model.d, seed=seed, sampler=sampler)
-    # X = sample_t(nsample, model.d, df=df, seed=seed, sampler=sampler)
     min_lr = max_lr / (1 << max_backtracking)
-
-    # loss_fn = jax.jit(model.divergence, static_argnames=('div_name', ))
-
     @jax.jit
     def LS_cond(state: LineSearchState):
         return jnp.logical_and(state.alpha > min_lr, 
@@ -70,74 +65,20 @@ def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, m
             new_best_params, new_best_ess = jax.lax.cond(
                 jnp.isnan(metrics.ess) | (metrics.ess < best_ess),
                 lambda: (best_params, best_ess),  
-                lambda: (params, metrics.ess)  
-    )
+                lambda: (params, metrics.ess)
+                )
+            return (params, opt_state, new_best_params, new_best_ess), metrics
         else:
             metrics = None
-        return (params, opt_state, new_best_params, new_best_ess), metrics
-
-    carry = (params, opt_state, best_params, best_ess)
+            return (params, opt_state, None, None), loss
+        
+    if callback is not None:
+        carry = (params, opt_state, best_params, best_ess)
+    else:
+        carry = (params, opt_state, None, None)
     final_state, losses = jax.lax.scan(lbfgs_step, carry, np.arange(max_iter))
     return final_state, losses
-    # pbar = trange(max_iter)
-    # loss_fn = lambda params, X: model.divergence(params, X, div_name)
-    # loss_fn = jax.jit(loss_fn)
     
-    
-    # for t in pbar:
-        # loss, grad = jax.value_and_grad(loss_fn)(params, X, div_name)
-        # div_logs.append(loss)
-        # loss, grad = jax.value_and_grad(model.divergence)(params, X, div_name)
-        # updates, opt_state = opt.update(grad, opt_state, params)
-        # alpha = max_lr
-        
-        # new_params = tree_add_scalar_mul(params, -alpha, updates)
-        # new_loss = loss_fn(new_params, X, div_name)
-        # init_state = LineSearchState(alpha, new_loss, params, loss, updates, tree_vdot(updates, grad))
-        # final_state = jax.lax.while_loop(LS_cond, LS_step, init_state)
-        # params = tree_add_scalar_mul(params, -final_state.alpha, updates)
-        # params, opt_state = lbfgs_step(params, opt_state)
-        
-        # def body_fun(alpha):
-        #     return alpha * 0.5
-
-        # jax.lax.while_loop(cond_fun, body_fun, alpha)
-        # for s in range(max_backtracking):
-        #     new_params = tree_add_scalar_mul(params, -alpha, updates)
-
-        #     new_loss = fn(new_params, X)
-        #     if jnp.isnan(new_loss):
-        #         alpha *= .5
-        #     elif new_loss > loss - slope_rtol * alpha * tree_vdot(updates, grad):
-        #         alpha *= 0.5
-        #     else:
-        #         break
-            
-        # params = tree_add_scalar_mul(params, -alpha, updates) 
-
-
-        # div_logs.append(fn(params, X, 'all'))
-        # evaluation
-        # Z_nf, log_det = model.forward_and_logdet(params, X)      
-        # log_q = -0.5 * jnp.sum(X**2, axis=-1) - 0.5 * model.d * jnp.log(2 * jnp.pi)
-        # proposal_log_densities = log_q - log_det
-        # target_log_densities = jax.vmap(model.target.log_prob)(Z_nf)
-        # log_weights = target_log_densities - proposal_log_densities
-        # log_weights -= np.max(log_weights)
-        # weights = np.exp(log_weights)
-        # try:
-        #     nf_samples = model.target.param_constrain(np.array(Z_nf, float))
-        # except:
-        #     nf_samples = np.array(Z_nf, float)
-        # moments_logs.append(get_moments(nf_samples, weights))
-        # ess_logs.append(get_effective_sample_size(weights).item())
-        # pbar.set_description(f"Loss: {loss.item()}, ESS: {ess_logs[-1]}")
-        # pbar.set_description(f"Loss: {loss.item()}")
-        # if tree_l2_norm(updates).item() < 1e-3:
-        #     print("Converged")
-
-    # return params, {'div_logs': div_logs, 'moments': moments_logs, 'ESS': ess_logs}
-
 def sgd(loss_fn, params0, max_iter=50, lr=1e-3, callback=None):
     opt = optax.adam(lr)
     opt_state = opt.init(params0)
