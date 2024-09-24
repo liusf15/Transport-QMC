@@ -7,7 +7,8 @@ import pickle
 import time
 import jax
 import jax.numpy as jnp
-from scipy.stats import qmc
+from jax.scipy.special import logsumexp
+from scipy.stats import qmc, t
 from qmc_flow.targets import BayesianLogisticRegression
 from qmc_flow.models.tqmc_AS import TransportQMC_AS
 from qmc_flow.train import lbfgs, sgd
@@ -33,7 +34,9 @@ def run_experiment(d, cov_x, N=20, seed=1, nsample=64, num_composition=1, max_de
     target = BayesianLogisticRegression(X, y, prior_scale=1.)
 
     M = 512
-    x = rng.standard_normal((M, d))
+    # x = rng.standard_normal((M, d))
+    key = jax.random.key(seed)
+    x = jax.random.normal(key, (M, d))
     G = jax.vmap(jax.grad(target.log_prob))(x) 
     G = G + x
     eigval, eigvec = np.linalg.eigh(G.T @ G / M)
@@ -48,11 +51,13 @@ def run_experiment(d, cov_x, N=20, seed=1, nsample=64, num_composition=1, max_de
     model_as = TransportQMC_AS(d, r, V, target, base_transform='normal-icdf', nonlinearity='logit', num_composition=num_composition, max_deg=max_deg)
     params = model_as.init_params()
 
-    soboleng = qmc.Sobol(d, seed=seed)
+    rng = np.random.default_rng(seed)
+    soboleng = qmc.Sobol(d, seed=rng)
     U = soboleng.random(nsample)
     U = jnp.array(U * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)    
     loss_fn = jax.jit(lambda params: model_as.reverse_kl(params, U))
 
+    soboleng = qmc.Sobol(d, seed=rng)
     U_val = soboleng.random(nsample)
     U_val = jnp.array(U_val * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
     callback = jax.jit(lambda params: model_as.metrics(params, U_val))
@@ -71,6 +76,52 @@ def run_experiment(d, cov_x, N=20, seed=1, nsample=64, num_composition=1, max_de
     print('final rkl', logs.rkl[-1])
     print('final ESS', logs.ess[-1])
     print('Max ESS', max_ess)
+
+    ####################################### !! TODO !! #######################################
+    # Mixture sampling 
+    # optimize weight: E_q (p/q)^2, where q=alpha q_theta + (1-alpha) tilde q, where tilde q is the logistic distribution
+    soboleng = qmc.Sobol(d, scramble=True, seed=rng)
+    X = soboleng.random(2**10) * (1 - MACHINE_EPSILON) + MACHINE_EPSILON * .5
+    X, log_det = jax.vmap(model_as.forward, in_axes=(None, 0))(best_params, X)
+    log_q = - log_det
+    X = X @ V.T
+    log_p = jax.vmap(target.log_prob)(X)
+    # log_l = jnp.sum(-X - 2 * jax.nn.softplus(-X), axis=1)
+    
+    @jax.jit
+    def mixture_chisq(refine_params):
+        loc = refine_params['loc']
+        logscale = refine_params['logscale']
+        alpha = refine_params['alpha']
+
+        X_ = (X - loc) / jnp.exp(logscale)
+        log_l = jnp.sum(jax.scipy.stats.t.logpdf(X_, df=5), axis=1) - jnp.sum(logscale)
+        log_q_mix = logsumexp(jnp.array([log_q + jnp.log(1-alpha), log_l + jnp.log(alpha)]), axis=0) 
+        log_weights = 2 * log_p - log_q - log_q_mix
+        return logsumexp(log_weights) - jnp.log(len(log_weights))
+    
+    alpha = jnp.ones(1) * 0.1
+    loc = jnp.zeros(d)
+    logscale = jnp.zeros(d)
+    refine_params = {'alpha': alpha, 'loc': loc, 'logscale': logscale}
+    # loss_fn_refine = jax.jit(lambda refine_params: mixture_chisq(refine_params))
+    refine_params, logs_2 = lbfgs(mixture_chisq, refine_params, max_iter=50)
+    
+    alpha = refine_params[0]['alpha'][0]
+    loc = refine_params[0]['loc']
+    logscale = refine_params[0]['logscale']
+
+    # sample from mixture, 
+    soboleng = qmc.Sobol(d+1, scramble=True, seed=rng)
+    U_mixture = soboleng.random(2**10)
+    idx = U_mixture[:, 0] < alpha # sample from l
+    Z_1 = t.ppf(U_mixture[idx, 1:], df=5) * np.exp(logscale) + loc
+    Z_2 = jax.vmap(model_as.forward, in_axes=(None, 0))(best_params, U_mixture[~idx, 1:])[0]
+    Z_mixture = np.zeros_like(U_mixture[:, 1:])
+    Z_mixture[idx] = Z_1
+    Z_mixture[~idx] = Z_2
+    # how to evaluate q_theta? Need inverse transform
+
 
     # samples, weights = model_as.sample(best_params, 2**16, seed)
     # get_moments(samples, weights)
