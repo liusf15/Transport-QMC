@@ -23,6 +23,7 @@ class LineSearchState(NamedTuple):
     loss: float
     updates: jnp.ndarray
     v_g_prod: float
+    lbd: float
 
 def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, memory_size=20, max_lr=1., callback=None):
     min_lr = max_lr / (1 << max_backtracking)
@@ -56,7 +57,7 @@ def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, m
         alpha = max_lr
         new_params = tree_add_scalar_mul(params, -alpha, updates)
         new_loss = loss_fn(new_params)
-        init_state = LineSearchState(alpha, new_loss, params, loss, updates, tree_vdot(updates, grad))
+        init_state = LineSearchState(alpha, new_loss, params, loss, updates, tree_vdot(updates, grad), 0.)
         final_state = jax.lax.while_loop(LS_cond, LS_step, init_state)
         params = tree_add_scalar_mul(params, -final_state.alpha, updates)
         
@@ -78,7 +79,63 @@ def lbfgs(loss_fn, params0, max_iter=50, max_backtracking=20, slope_rtol=1e-4, m
         carry = (params, opt_state, None, None)
     final_state, losses = jax.lax.scan(lbfgs_step, carry, np.arange(max_iter))
     return final_state, losses
+
+def lbfgs_annealed(loss_fn, params0, max_iter=50, anneal_iter=50, max_lbd=1., max_backtracking=20, slope_rtol=1e-4, memory_size=20, max_lr=1., callback=None):
+    min_lr = max_lr / (1 << max_backtracking)
+    @jax.jit
+    def LS_cond(state: LineSearchState):
+        return jnp.logical_and(state.alpha > min_lr, 
+                        jnp.isnan(state.new_loss) | (state.new_loss > state.loss - slope_rtol * state.alpha * state.v_g_prod))
+
+    @jax.jit
+    def LS_step(state: LineSearchState):
+        new_alpha = state.alpha * 0.5
+        new_params = tree_add_scalar_mul(state.params, -new_alpha, state.updates)
+        new_loss = loss_fn(new_params, state.lbd)
+        state = state._replace(alpha=new_alpha, new_loss=new_loss)
+        return state
+
+    params = params0
+    best_params = params0
+    best_ess = 0.
     
+    opt = optax.scale_by_lbfgs(memory_size=memory_size)
+    opt_state = opt.init(params)
+
+    @jax_tqdm.scan_tqdm(max_iter)
+    def lbfgs_step(carry, t):
+        params, opt_state, best_params, best_ess = carry
+        # jax.debug.print("{}", params)
+        lbd = jnp.clip(max_lbd / anneal_iter, 0., max_lbd)
+        loss, grad = jax.value_and_grad(loss_fn)(params, lbd)
+        updates, opt_state = opt.update(grad, opt_state, params)
+
+        alpha = max_lr
+        new_params = tree_add_scalar_mul(params, -alpha, updates)
+        new_loss = loss_fn(new_params, lbd)
+        init_state = LineSearchState(alpha, new_loss, params, loss, updates, tree_vdot(updates, grad), lbd)
+        final_state = jax.lax.while_loop(LS_cond, LS_step, init_state)
+        params = tree_add_scalar_mul(params, -final_state.alpha, updates)
+        
+        if callback is not None:
+            metrics = callback(params)
+            new_best_params, new_best_ess = jax.lax.cond(
+                jnp.isnan(metrics.ess) | (metrics.ess < best_ess),
+                lambda: (best_params, best_ess),  
+                lambda: (params, metrics.ess)
+                )
+            return (params, opt_state, new_best_params, new_best_ess), metrics
+        else:
+            metrics = None
+            return (params, opt_state, None, None), loss
+        
+    if callback is not None:
+        carry = (params, opt_state, best_params, best_ess)
+    else:
+        carry = (params, opt_state, None, None)
+    final_state, losses = jax.lax.scan(lbfgs_step, carry, np.arange(max_iter))
+    return final_state, losses
+
 def sgd(loss_fn, params0, max_iter=50, lr=1e-3, callback=None):
     opt = optax.adam(lr)
     opt_state = opt.init(params0)

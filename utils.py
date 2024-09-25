@@ -6,6 +6,14 @@ import matplotlib.pyplot as plt
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
+def sample_uniform(nsample, d, rng, sampler):
+    if sampler == 'mc':
+        U = rng.random((nsample, d))
+    else:
+        soboleng =qmc.Sobol(d, scramble=True, seed=rng)    
+        U = soboleng.random(nsample) * (1 - MACHINE_EPSILON) + MACHINE_EPSILON * .5
+    return U
+
 def sample_gaussian(nsample, d, seed=0, sampler='rqmc'):
     if sampler == 'rqmc':
         soboleng = qmc.Sobol(d, scramble=True, seed=seed)
