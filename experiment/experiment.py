@@ -10,7 +10,7 @@ from scipy.stats import qmc
 from qmc_flow.targets import StanModel, Gaussian, BayesianLogisticRegression
 from qmc_flow.models.tqmc import TransportQMC
 from qmc_flow.train import lbfgs, sgd
-from qmc_flow.utils import get_moments
+from qmc_flow.utils import get_moments, sample_uniform
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
@@ -38,13 +38,11 @@ def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3,
     model = TransportQMC(d, target, base_transform='normal-icdf', nonlinearity='logit', num_composition=num_composition, max_deg=max_deg)
     params = model.init_params()
     
-    soboleng = qmc.Sobol(d, seed=seed)
-    U = soboleng.random(nsample)
-    U = jnp.array(U * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
+    rng = np.random.default_rng(seed)
+    U = sample_uniform(nsample, d, rng, 'rqmc')
     loss_fn = jax.jit(lambda params: model.reverse_kl(params, U))
 
-    U_val = soboleng.random(nsample)
-    U_val = jnp.array(U_val * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)
+    U_val = sample_uniform(nsample, d, rng, 'rqmc')
     callback = jax.jit(lambda params: model.metrics(params, U_val))
 
     start = time.time()
