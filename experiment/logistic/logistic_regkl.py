@@ -25,7 +25,6 @@ def get_ref_moments(d, N, cov_x, rho):
     moments_2 = res['moments_2']
     return np.mean(moments_1, axis=0), np.mean(moments_2, axis=0)
 
-
 def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, annealed=False, optimizer='lbfgs', max_iter=50, lr=1., savepath='results'):
     
     ######################## generate data ########################
@@ -33,13 +32,22 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
     if cov_x == 'equi':
         rho = 0.7
         cov_X = np.eye(d) * (1 - rho) + rho
+        chol_x = np.linalg.cholesky(cov_X)
     elif cov_x == 'ar1':
         rho = 0.9
         cov_X = scipy.linalg.toeplitz(rho ** np.arange(d))
+        chol_x = np.linalg.cholesky(cov_X)
+    elif cov_x == 'low_rank':
+        rho = 3
+        D = np.ones(d) * .1
+        D[:rho] = np.array([3., 2., 1.])
+        orth = np.linalg.qr(rng.standard_normal((d, d)))[0]
+        chol_x = orth.T @ np.diag(D)
     else:
-        cov_X = np.eye(d)
-    chol_X = np.linalg.cholesky(cov_X)
-    X = rng.standard_normal((N, d)) @ chol_X.T
+        raise NotImplementedError
+    
+    X = rng.standard_normal((N, d)) @ chol_x.T
+
     beta = rng.random(d) * 2 - 1
     y = rng.binomial(1, 1 / (1 + np.exp(-jnp.dot(X, beta))))
     ref_moments_1, ref_moments_2 = get_ref_moments(d, N, cov_x, rho)
@@ -58,7 +66,8 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
     eigvec = eigvec[:, ::-1]
 
     var_explained = np.cumsum(eigval) / np.sum(eigval)
-    r = np.where(var_explained > 0.95)[0][0] + 1 # rank
+    r = np.where(var_explained > 0.99)[0][0] + 2 # rank
+    r = rho
     print('Rank', r)
     V = eigvec[:]
 
@@ -93,11 +102,11 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
         callback = lambda params: callback_fn(params, U_val)
 
         if annealed:
-            loss = lambda params, lbd: model_as.reg_kl(params, lbd, U)    
+            loss = lambda params, lbd: loss_fn(params, lbd, U)    
             final_state, logs = lbfgs_annealed(loss, params, max_iter=max_iter, anneal_iter=max_iter/2, max_lbd=1., callback=callback, max_lr=lr)
         else:
-            loss = lambda params: model_as.reg_kl(params, U)    
-            final_state, logs = lbfgs(loss_fn, params, max_iter=max_iter, callback=callback, max_lr=lr)
+            loss = lambda params: loss_fn(params, U)    
+            final_state, logs = lbfgs(loss, params, max_iter=max_iter, callback=callback, max_lr=lr)
         
         print('final rkl', logs.rkl[-1], 'final chisq', logs.chisq[-1], 'reg_rkl', logs.reg_rkl[-1], 'final ESS', logs.ess[-1])
 
@@ -105,7 +114,7 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
             min_val_loss = logs.reg_rkl[-1]
             best_params = final_state[0]
             max_val_ess = logs.ess[-1]
-
+    print(min_val_loss, max_val_ess)
     ######################## testing ########################
     @jax.jit
     def get_samples(U):
@@ -123,7 +132,7 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
         mse_2 = (ref_moments_2 - moments_2)**2
         return jnp.concat([mse_1, mse_2])
     
-    m_list = np.arange(3, 12)
+    m_list = np.arange(3, 14)
     mse = {}
     mse_IS = {}
     moments_1 = {}
