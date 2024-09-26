@@ -56,7 +56,6 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
 
     ######################## find active subspace ########################
     M = 512
-    # x = rng.standard_normal((M, d))
     key = jax.random.key(0)
     x = jax.random.normal(key, (M, d))
     G = jax.vmap(jax.grad(target.log_prob))(x) 
@@ -94,7 +93,6 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
         soboleng = qmc.Sobol(d, seed=rng)
         U = soboleng.random(nsample)
         U = jnp.array(U * (1 - MACHINE_EPSILON) + .5 * MACHINE_EPSILON)    
-        # loss_fn = jax.jit(lambda params: model_as.reverse_kl(params, U))
 
         soboleng = qmc.Sobol(d, seed=rng)
         U_val = soboleng.random(nsample)
@@ -131,17 +129,6 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
     print(eigval, rot)
 
     ######################## testing ########################
-    @jax.jit
-    def get_samples(U):
-        X, log_det = jax.vmap(model_as.forward, in_axes=(None, 0))(best_params, U)
-        proposal_log_densities = - log_det
-        X = X @ model_as.V.T
-        target_log_densities = jax.vmap(target.log_prob)(X)
-        log_weights = target_log_densities - proposal_log_densities
-        log_weights -= jnp.nanmean(log_weights)
-        weights = jnp.exp(log_weights)
-        return X, weights
-    
     @jax.jit
     def get_samples_rot(U, rot=None):
         Z = ndtri(U)
