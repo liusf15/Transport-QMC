@@ -8,12 +8,12 @@ import time
 from tqdm import trange
 import jax
 import jax.numpy as jnp
-from jax.scipy.special import logsumexp
+from jax.scipy.special import logsumexp, ndtri
 from scipy.stats import qmc, t
 from qmc_flow.targets import BayesianLogisticRegression
 from qmc_flow.models.tqmc_AS import TransportQMC_AS
 from qmc_flow.train import lbfgs, lbfgs_annealed, sgd
-from qmc_flow.utils import get_effective_sample_size, get_moments, sample_uniform
+from qmc_flow.utils import get_effective_sample_size, get_moments, sample_uniform, sample_gaussian
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
@@ -115,6 +115,21 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
             best_params = final_state[0]
             max_val_ess = logs.ess[-1]
     print(min_val_loss, max_val_ess)
+    ######################## rotate ########################
+    # find the AS of the function z -> log w(T(z)), where z ~ N(0, I)
+    # so that we can rotate the Gaussian samples by 
+    def log_w(z):
+        x, log_det = model_as.forward_from_normal(best_params, z)
+        log_p = target.log_prob(model_as.V @ x)
+        log_q = -.5 * jnp.sum(z**2) - .5 * d * jnp.log(2 * jnp.pi) - log_det
+        return log_p - log_q
+    Z = sample_gaussian(512, d, seed=0, sampler='rqmc')
+    G_2 = jax.vmap(jax.grad(log_w))(Z)
+    eigval, eigvec = np.linalg.eigh(G_2.T @ G_2 / M)
+    eigval = eigval[::-1]
+    rot = eigvec[:, ::-1]
+    print(eigval, rot)
+
     ######################## testing ########################
     @jax.jit
     def get_samples(U):
@@ -127,11 +142,26 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
         weights = jnp.exp(log_weights)
         return X, weights
     
+    @jax.jit
+    def get_samples_rot(U, rot=None):
+        Z = ndtri(U)
+        if rot is not None:
+            Z = Z @ rot.T
+        X, log_det = jax.vmap(model_as.forward_from_normal, in_axes=(None, 0))(best_params, Z)
+        X = X @ model_as.V.T
+        log_p = jax.vmap(target.log_prob)(X)
+        log_q = -.5 * jnp.sum(Z**2, axis=1) - .5 * d * jnp.log(2 * jnp.pi) - log_det
+        log_weights = log_p - log_q
+        log_weights -= jnp.nanmean(log_weights)
+        weights = jnp.exp(log_weights)
+        return X, weights
+
     def get_mse(moments_1, moments_2):
         mse_1 = (ref_moments_1 - moments_1)**2
         mse_2 = (ref_moments_2 - moments_2)**2
         return jnp.concat([mse_1, mse_2])
     
+    methods = ['mc', 'rqmc', 'rqmc_as']
     m_list = np.arange(3, 14)
     mse = {}
     mse_IS = {}
@@ -142,9 +172,13 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
     nrep = 50
     for i in trange(nrep, desc='Testing'):
         for m in m_list:
-            for sampler in ['mc', 'rqmc']:
-                U = sample_uniform(2**m, d, rng, sampler)
-                X, weights = get_samples(U)
+            for sampler in methods:
+                if sampler in ['mc', 'rqmc']:
+                    U = sample_uniform(2**m, d, rng, sampler)
+                    X, weights = get_samples_rot(U, rot=None)
+                else:
+                    U = sample_uniform(2**m, d, rng, 'rqmc')
+                    X, weights = get_samples_rot(U, rot=rot)
                 # IS
                 moment_1, moment_2 = get_moments(X, weights)
                 moments_1_IS[(sampler, m, i)], moments_2_IS[(sampler, m, i)] = moment_1, moment_2
@@ -154,7 +188,7 @@ def run_experiment(d, cov_x, N=20, nsample=64, num_composition=1, max_deg=3, ann
                 moment_1, moment_2 = get_moments(X, None)
                 moments_1[(sampler, m, i)], moments_2[(sampler, m, i)] = moment_1, moment_2
                 mse[(sampler, m, i)] = get_mse(moment_1, moment_2)
-
+            
     model_params = {
         'r': r,
         'V': V,
