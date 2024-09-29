@@ -70,6 +70,20 @@ class TransportQMC_AS(TransportQMC):
         x = jnp.concatenate([y, z])
         return x, log_det
 
+    def forward_from_normal(self, params, x):
+        log_det = 0.
+        y = x[:self.r]
+        for p in params['active']:
+            y, log_det_ = self.forward_one_layer(p, y)
+            log_det += log_det_
+
+        z = x[self.r:]
+        z = jnp.exp(params['inactive']['D']) * z + params['inactive']['b']   
+        log_det += jnp.sum(params['inactive']['D'])
+
+        x = jnp.concatenate([y, z])
+        return x, log_det
+
     def reverse_kl(self, params, u):
         """
         u: (num_samples, d) uniform samples
