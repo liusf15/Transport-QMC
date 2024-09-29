@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import argparse
 import pickle
-import time
+from tqdm import trange
 import jax
 import jax.numpy as jnp
 from scipy.stats import qmc
@@ -14,8 +14,23 @@ from qmc_flow.utils import get_moments, sample_uniform
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
+def get_ref_moments(name):
+    if name == 'corr-normal':
+        ref_moments_1 = np.zeros(50)
+        ref_moments_2 = np.ones(50)
+    elif name == 'rosenbrock':
+        ref_moments_1 = np.array([1., 1., 2., 2.])
+        ref_moments_2 = np.array([2., 2., 10.1, 10.1])
+    else:
+        filename = f'/mnt/home/sliu1/normalizing_flows/qmc_flow/stan_models/moments_{name}_chain_20_warmup_25000_nsample_50000.pkl'
+        with open(filename, 'rb') as f:
+            moments = pickle.load(f)
+        ref_moments_1 = moments['moment_1'].mean(0)
+        ref_moments_1_var = moments['moment_1'].var(0)
+        ref_moments_2 = moments['moment_2'].mean(0)
+    return ref_moments_1, ref_moments_2
 
-def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3, optimizer='lbfgs', max_iter=50, lr=1., savepath='results'):
+def run_experiment(name='hmm', nsample=64, num_composition=1, max_deg=3, optimizer='lbfgs', max_iter=50, lr=1., savepath='results'):
     if name == 'gaussian':
         d = 10
         mean = jnp.zeros(d)
@@ -32,45 +47,92 @@ def run_experiment(name='hmm', seed=1, nsample=64, num_composition=1, max_deg=3,
         data_path = f"qmc_flow/stan_models/{name}.json"
         stan_path = f"qmc_flow/stan_models/{name}.stan"
         target = StanModel(stan_path, data_path)
-        
+    ref_moments_1, ref_moments_2 = get_ref_moments(name)
     d = target.d
 
+    ######################## training ########################
     model = TransportQMC(d, target, base_transform='normal-icdf', nonlinearity='logit', num_composition=num_composition, max_deg=max_deg)
     params = model.init_params()
+    best_params = params
+    max_val_ess = 0
+    loss_fn = jax.jit(model.reverse_kl)
+    callback_fn = jax.jit(model.metrics)
+    for seed in range(10):
+        rng = np.random.default_rng(seed)
+        U = sample_uniform(nsample, d, rng, 'rqmc')
+        loss = lambda params: loss_fn(params, U)
+        U_val = sample_uniform(nsample, d, rng, 'rqmc')
+        callback = lambda params: callback_fn(params, U_val)
+        
+        if optimizer == 'lbfgs':
+            final_state, logs = lbfgs(loss, params, max_iter=max_iter, callback=callback, max_lr=lr)
+        else:
+            final_state, logs = sgd(loss, params, max_iter=max_iter, lr=lr, callback=callback)
+        if logs.ess[-1] > max_val_ess:
+            best_params = final_state[0]
+            max_val_ess = logs.ess[-1]
+
+    print('Max ESS', max_val_ess)
+    ######################## testing ########################
+    @jax.jit
+    def get_samples(U):
+        X, log_det = jax.vmap(model.forward, in_axes=(None, 0))(best_params, U)
+        log_p = jax.vmap(target.log_prob)(X)
+        log_weights = log_p + log_det
+        log_weights -= jnp.nanmean(log_weights)
+        weights = jnp.exp(log_weights)
+        return X, weights
+
+    def get_moments(X, weights):
+        if getattr(target, 'param_constrain', None):
+            X = target.param_constrain(np.array(X, float))
+        moments_1 = jnp.sum(X * weights[:, None], axis=0) / jnp.sum(weights)
+        moments_2 = jnp.sum(X**2 * weights[:, None], axis=0) / jnp.sum(weights)
+        return moments_1, moments_2
     
-    rng = np.random.default_rng(seed)
-    U = sample_uniform(nsample, d, rng, 'rqmc')
-    loss_fn = jax.jit(lambda params: model.reverse_kl(params, U))
+    def get_mse(moments_1, moments_2):
+        mse_1 = (ref_moments_1 - moments_1)**2
+        mse_2 = (ref_moments_2 - moments_2)**2
+        return jnp.concat([mse_1, mse_2])
+    
+    m_list = np.arange(3, 14)
+    mse = {}
+    mse_IS = {}
+    moments_1 = {}
+    moments_2 = {}
+    moments_1_IS = {}
+    moments_2_IS = {}
+    nrep = 50
+    rng = np.random.default_rng(2024)
+    for i in trange(nrep, desc='Testing'):
+        for m in m_list:
+            for sampler in ['mc', 'rqmc']:
+                U = sample_uniform(2**m, d, rng, sampler)
+                X, weights = get_samples(U)
+                # IS
+                moment_1, moment_2 = get_moments(X, weights)
+                moments_1_IS[(sampler, m, i)], moments_2_IS[(sampler, m, i)] = moment_1, moment_2
+                mse_IS[(sampler, m, i)] = get_mse(moment_1, moment_2)
 
-    U_val = sample_uniform(nsample, d, rng, 'rqmc')
-    callback = jax.jit(lambda params: model.metrics(params, U_val))
-
-    start = time.time()
-    if optimizer == 'lbfgs':
-        final_state, logs = lbfgs(loss_fn, params, max_iter=max_iter, callback=callback, max_lr=lr)
-    else:
-        final_state, logs = sgd(loss_fn, params, max_iter=max_iter, lr=lr, callback=callback)
-    end = time.time()
-    print('Time elapsed', end - start)
-
-    params = final_state[0]
-    best_params = final_state[2]
-    max_ess = final_state[3]
-    print('final rkl', logs.rkl[-1])
-    print('final ESS', logs.ess[-1])
-    print('Max ESS', max_ess)
-
-    results = {
-        'params': params,
-        'time': end - start,
-        'rkl': logs.rkl,
-        'fkl': logs.fkl,
-        'chisq': logs.chisq,
-        'ess': logs.ess,
+                # no IS
+                moment_1, moment_2 = get_moments(X, jnp.ones_like(weights))
+                moments_1[(sampler, m, i)], moments_2[(sampler, m, i)] = moment_1, moment_2
+                mse[(sampler, m, i)] = get_mse(moment_1, moment_2)
+            
+    model_params = {
+        'ess': max_val_ess,
         'best_params': best_params,
-        'max_ess': max_ess
     }
-    savepath = os.path.join(savepath, f'tqmc_val_n_{nsample}_comp_{num_composition}_deg_{max_deg}_{optimizer}_iter_{max_iter}_lr_{lr}_{seed}.pkl')
+    test_results = {
+        'mse': mse, 
+        'moments_1': moments_1, 
+        'moments_2': moments_2, 
+        'mse_IS': mse_IS, 
+        'moments_1_IS': moments_1_IS, 
+        'moments_2_IS': moments_2_IS
+    }
+    results = {'model_params': model_params, 'test_results': test_results}
+    savepath = os.path.join(savepath, f'mse_n_{nsample}_comp_{num_composition}_deg_{max_deg}_{optimizer}_iter_{max_iter}_lr_{lr}.pkl')
     with open(savepath, 'wb') as f:
         pickle.dump(results, f)
     print('saved to', savepath)
@@ -92,4 +154,4 @@ if __name__ == '__main__':
     nsample = 2**args.m
     savepath = os.path.join(args.rootdir, args.date, args.name)
     os.makedirs(savepath, exist_ok=True)
-    run_experiment(args.name, args.seed, nsample=nsample, num_composition=args.num_composition, max_deg=args.max_deg, optimizer=args.optimizer, max_iter=args.max_iter, lr=args.lr, savepath=savepath)
+    run_experiment(args.name, nsample=nsample, num_composition=args.num_composition, max_deg=args.max_deg, optimizer=args.optimizer, max_iter=args.max_iter, lr=args.lr, savepath=savepath)
