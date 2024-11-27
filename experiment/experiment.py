@@ -10,7 +10,7 @@ from scipy.stats import qmc
 from qmc_flow.targets import StanModel, Gaussian, BayesianLogisticRegression
 from qmc_flow.models.tqmc import TransportQMC
 from qmc_flow.train import lbfgs, sgd
-from qmc_flow.utils import get_moments, sample_uniform
+from qmc_flow.utils import get_moments, sample_uniform, pareto_IS
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
@@ -111,13 +111,19 @@ def run_experiment(name='hmm', nsample=64, num_composition=1, max_deg=3, optimiz
                 X, weights = get_samples(U)
                 # IS
                 moment_1, moment_2 = get_moments(X, weights)
-                moments_1_IS[(sampler, m, i)], moments_2_IS[(sampler, m, i)] = moment_1, moment_2
-                mse_IS[(sampler, m, i)] = get_mse(moment_1, moment_2)
+                moments_1[(sampler, 'IS', m, i)], moments_2_IS[(sampler, 'IS', m, i)] = moment_1, moment_2
+                mse[(sampler, 'IS', m, i)] = get_mse(moment_1, moment_2)
 
                 # no IS
                 moment_1, moment_2 = get_moments(X, jnp.ones_like(weights))
-                moments_1[(sampler, m, i)], moments_2[(sampler, m, i)] = moment_1, moment_2
-                mse[(sampler, m, i)] = get_mse(moment_1, moment_2)
+                moments_1[(sampler, 'no-IS', m, i)], moments_2[(sampler, 'no-IS', m, i)] = moment_1, moment_2
+                mse[(sampler, 'no-IS', m, i)] = get_mse(moment_1, moment_2)
+
+                # pareto smoothed IS
+                weights_smoothed = pareto_IS(np.array(weights))
+                moment_1, moment_2 = get_moments(X, weights_smoothed)
+                moments_1[(sampler, 'PSIS', m, i)], moments_2[(sampler, 'PSIS', m, i)] = moment_1, moment_2
+                mse[(sampler, 'PSIS', m, i)] = get_mse(moment_1, moment_2)
             
     model_params = {
         'ess': max_val_ess,
@@ -127,9 +133,6 @@ def run_experiment(name='hmm', nsample=64, num_composition=1, max_deg=3, optimiz
         'mse': mse, 
         'moments_1': moments_1, 
         'moments_2': moments_2, 
-        'mse_IS': mse_IS, 
-        'moments_1_IS': moments_1_IS, 
-        'moments_2_IS': moments_2_IS
     }
     results = {'model_params': model_params, 'test_results': test_results}
     savepath = os.path.join(savepath, f'mse_n_{nsample}_comp_{num_composition}_deg_{max_deg}_{optimizer}_iter_{max_iter}_lr_{lr}.pkl')
