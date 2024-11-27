@@ -39,9 +39,6 @@ def mixture_beta_inverse_cdf(q, shapes, weights):
     x, itercount = jax.lax.while_loop(cond_fn, step_fn, (x, 0))
     return x
 
-# q = mixture_beta_cdf(0.7, shapes=np.array([[1, 1], [2, 1]]), weights=np.array([0., 0.]))
-# mixture_beta_inverse_cdf(q, shapes=np.array([[1, 1], [2, 1]]), weights=np.array([0., 0.]))
-
 class TransportQMC:
     def __init__(self, d, target, base_transform='logit', nonlinearity='logit', num_composition=1, max_deg=3):
         self.d = d
