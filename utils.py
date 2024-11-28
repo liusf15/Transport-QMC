@@ -3,6 +3,7 @@ from scipy.special import ndtri, stdtrit
 from scipy.stats import qmc
 from scipy.stats import multivariate_t
 import matplotlib.pyplot as plt
+from scipy.stats import genpareto
 
 MACHINE_EPSILON = np.finfo(np.float64).eps
 
@@ -84,3 +85,13 @@ def make_heatmap(target, i1=0, i2=1):
     ax[0].set_ylabel('Dimension ' + str(i2))
     return fig, ax
 
+def pareto_IS(weights):
+    sort_idx = np.argsort(weights)
+    n = len(weights)
+    M = int(min(0.2 * n, 3 * np.sqrt(n)))
+    mu = weights[sort_idx[n-M-1]]
+    w_largest = weights[sort_idx[n-M:]]
+    k, mu, scale = genpareto.fit(w_largest, floc=mu)
+    w_largest_smoothed = mu + scale / k * (np.power(1 - (np.arange(M) + .5) / M, -k) - 1)
+    weights[sort_idx[n-M:]] = np.minimum(w_largest_smoothed, w_largest[-1])
+    return weights

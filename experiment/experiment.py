@@ -1,18 +1,26 @@
 import numpy as np
-import pandas as pd
 import os
 import argparse
 import pickle
 from tqdm import trange
+from scipy.stats import qmc
 import jax
 import jax.numpy as jnp
-from scipy.stats import qmc
 from qmc_flow.targets import StanModel, Gaussian, BayesianLogisticRegression
 from qmc_flow.models.tqmc import TransportQMC
 from qmc_flow.train import lbfgs, sgd
-from qmc_flow.utils import get_moments, sample_uniform, pareto_IS
+from qmc_flow.utils import pareto_IS
 
-MACHINE_EPSILON = np.finfo(np.float64).eps
+MACHINE_EPSILON = jnp.finfo(jnp.float32).eps
+
+def sample_uniform(nsample, d, rng, sampler):
+    if sampler == 'mc':
+        U = rng.random((nsample, d))
+    else:
+        soboleng =qmc.Sobol(d, scramble=True, seed=rng)    
+        U = soboleng.random(nsample) 
+    U = U * (1 - MACHINE_EPSILON) + MACHINE_EPSILON * .5
+    return U
 
 def get_ref_moments(name):
     if name == 'corr-normal':
@@ -57,7 +65,7 @@ def run_experiment(name='hmm', nsample=64, num_composition=1, max_deg=3, optimiz
     max_val_ess = 0
     loss_fn = jax.jit(model.reverse_kl)
     callback_fn = jax.jit(model.metrics)
-    for seed in range(10):
+    for seed in range(1):
         rng = np.random.default_rng(seed)
         U = sample_uniform(nsample, d, rng, 'rqmc')
         loss = lambda params: loss_fn(params, U)
@@ -95,14 +103,11 @@ def run_experiment(name='hmm', nsample=64, num_composition=1, max_deg=3, optimiz
         mse_2 = (ref_moments_2 - moments_2)**2
         return jnp.concat([mse_1, mse_2])
     
-    m_list = np.arange(3, 14)
+    m_list = np.arange(3, 14, 2)
     mse = {}
-    mse_IS = {}
     moments_1 = {}
     moments_2 = {}
-    moments_1_IS = {}
-    moments_2_IS = {}
-    nrep = 50
+    nrep = 1
     rng = np.random.default_rng(2024)
     for i in trange(nrep, desc='Testing'):
         for m in m_list:
@@ -111,7 +116,7 @@ def run_experiment(name='hmm', nsample=64, num_composition=1, max_deg=3, optimiz
                 X, weights = get_samples(U)
                 # IS
                 moment_1, moment_2 = get_moments(X, weights)
-                moments_1[(sampler, 'IS', m, i)], moments_2_IS[(sampler, 'IS', m, i)] = moment_1, moment_2
+                moments_1[(sampler, 'IS', m, i)], moments_2[(sampler, 'IS', m, i)] = moment_1, moment_2
                 mse[(sampler, 'IS', m, i)] = get_mse(moment_1, moment_2)
 
                 # no IS
