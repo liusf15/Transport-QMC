@@ -115,6 +115,13 @@ class TransportQMC:
             log_det += log_det_
         return x, log_det
     
+    def forward_from_gaussian(self, params, x):
+        log_det = 0.
+        for p in params:
+            x, log_det_ = self.forward_one_layer(p, x)
+            log_det += log_det_
+        return x, log_det
+
     def elementwise_inverse(self, weights, x):
         log_det = jnp.sum(jnp.log(self.F_grad(x)))
         x = self.F(x)

@@ -65,7 +65,7 @@ def run_experiment(name='hmm', nsample=64, num_composition=1, max_deg=3, optimiz
     max_val_ess = 0
     loss_fn = jax.jit(model.reverse_kl)
     callback_fn = jax.jit(model.metrics)
-    for seed in range(1):
+    for seed in range(10):
         rng = np.random.default_rng(seed)
         U = sample_uniform(nsample, d, rng, 'rqmc')
         loss = lambda params: loss_fn(params, U)
@@ -107,7 +107,7 @@ def run_experiment(name='hmm', nsample=64, num_composition=1, max_deg=3, optimiz
     mse = {}
     moments_1 = {}
     moments_2 = {}
-    nrep = 1
+    nrep = 50
     rng = np.random.default_rng(2024)
     for i in trange(nrep, desc='Testing'):
         for m in m_list:
