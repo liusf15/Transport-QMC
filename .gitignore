@@ -1,3 +1,8 @@
 result/
 *.so
 stan_models/
+.vscode/
+__pycache__/
+*egg-info/
+build/
+venv*/
