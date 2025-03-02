@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.special import logsumexp
 import os
 import argparse
 import pickle
@@ -67,8 +66,9 @@ def run_experiment(posterior_name='arK', nsample=64, num_composition=1, max_deg=
         if getattr(target, 'param_constrain', None):
             X = target.param_constrain(np.array(X, float))
         
-        moments_1 = jnp.exp(logsumexp(log_weights[:, None], b=X, axis=0) - logsumexp(log_weights))
-        moments_2 = jnp.exp(logsumexp(log_weights[:, None], b=X**2, axis=0) - logsumexp(log_weights))
+        weights = jnp.exp(log_weights - jnp.max(log_weights))
+        moments_1 = jnp.sum(weights[:, None] * X, axis=0) / jnp.sum(weights)
+        moments_2 = jnp.sum(weights[:, None] * X**2, axis=0) / jnp.sum(weights)
         return moments_1, moments_2
     
     m_list = np.arange(3, 12, 2)
@@ -96,11 +96,11 @@ def run_experiment(posterior_name='arK', nsample=64, num_composition=1, max_deg=
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
-    argparser.add_argument('--posterior_name', type=str, default='hmm', choices=['arK', 'gp_regr', 'hmm', 'nes_logit'])
+    argparser.add_argument('--posterior_name', type=str, default='hmm', choices=['arK', 'gp_regr', 'hmm', 'nes_logit', 'normal_mixture'])
     argparser.add_argument('--m', type=int, default=8)
     argparser.add_argument('--num_composition', type=int, default=3)
     argparser.add_argument('--max_deg', type=int, default=7)
-    argparser.add_argument('--optimizer', type=str, default='lbfgs')
+    argparser.add_argument('--optimizer', type=str, default='lbfgs', choices=['lbfgs', 'sgd'])
     argparser.add_argument('--max_iter', type=int, default=400)
     argparser.add_argument('--lr', type=float, default=1.)
     argparser.add_argument('--savepath', type=str, default=None)
