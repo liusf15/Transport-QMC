@@ -1,0 +1,11 @@
+auto_mix_prep==0.2.0
+bridgestan==2.6.0
+jax==0.5.1
+jax_tqdm==0.3.1
+matplotlib==3.10.1
+numpy==2.2.3
+numpyro==0.17.0
+optax==0.2.4
+pandas==2.2.3
+scipy==1.15.2
+seaborn==0.13.2

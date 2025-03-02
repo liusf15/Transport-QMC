@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transport_qmc"  
+version = "0.1.0"   
+description = "A Python package for Transport QMC" 
+authors = [{ name = "Sifan Liu", email = "sliu@flatironinstitute.org" }]
+readme = "README.md" 
+
+dependencies = [
+    "auto_mix_prep==0.2.0",
+    "bridgestan==2.6.0",
+    "jax==0.5.1",
+    "jax_tqdm==0.3.1",
+    "matplotlib==3.10.1",
+    "numpy==2.2.3",
+    "numpyro==0.17.0",
+    "optax==0.2.4",
+    "pandas==2.2.3",
+    "scipy==1.15.2",
+    "seaborn==0.13.2"
+]
+
+[tool.setuptools]
+packages = ["transport_qmc"]  # Replace with your actual package name
+
+[tool.setuptools.package-dir]
+"" = "src"  # Tells setuptools to look inside src/
+
+[project.urls]
+"Repository" = "https://github.com/liusf15/Transport-QMC.git"
