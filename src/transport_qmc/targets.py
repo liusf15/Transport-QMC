@@ -47,6 +47,7 @@ class arK:
                 mean_t = alpha + jnp.dot(beta, self.y[t-self.K:t])
                 numpyro.sample(f"y_{t}", dist.Normal(mean_t, sigma), obs=self.y[t])
 
+        self.numpyro_model = _numpyro_model
         self._seeded_model = numpyro.handlers.seed(_numpyro_model, jax.random.key(0))
 
     def _log_prob(self, x):
@@ -155,6 +156,7 @@ class hmm:
             
             numpyro.factor("log_prob", logsumexp(gamma[self.N - 1]))
 
+        self.numpyro_model = _numpyro_model
         self._seeded_model = numpyro.handlers.seed(_numpyro_model, jax.random.key(0))
 
     def _log_prob(self, x):
@@ -169,10 +171,9 @@ class hmm:
 
     def param_constrain(self, X):
         if X.ndim == 1:
-            X[-1] = jnp.exp(X[-1])
-            return X
-        X[:, -1] = jnp.exp(X[:, -1])
-        return X
+            return jnp.array([jax.nn.sigmoid(X[0]), jax.nn.sigmoid(X[1]), jnp.exp(X[2]), jnp.exp(X[2]) + jnp.exp(X[3])])
+        if X.ndim == 2:
+            return jnp.hstack([jax.nn.sigmoid(X[:, 0:1]), jax.nn.sigmoid(X[:, 1:2]), jnp.exp(X[:, 2:3]), jnp.exp(X[:, 2:3]) + jnp.exp(X[:, 3:4])])
     
 class nes_logit:
     def __init__(self, data_file):
@@ -190,6 +191,7 @@ class nes_logit:
             x = self.income[:, None]  
             numpyro.sample("vote", BernoulliLogits(x @ beta + alpha), obs=self.vote)
 
+        self.numpyro_model = _numpyro_model
         self._seeded_model = numpyro.handlers.seed(_numpyro_model, jax.random.key(0))
     
     def _log_prob(self, x):
@@ -240,6 +242,7 @@ class normal_mixture:
         
             numpyro.factor("obs", log_mix.sum())
 
+        self.numpyro_model = _numpyro_model
         self._seeded_model = numpyro.handlers.seed(_numpyro_model, jax.random.key(0))
     
     def _log_prob(self, x):

@@ -1,5 +1,4 @@
 import numpy as np
-import itertools
 from scipy.stats import qmc
 import jax.numpy as jnp
 from jax.scipy.special import betainc, ndtri, ndtr, logit, logsumexp
