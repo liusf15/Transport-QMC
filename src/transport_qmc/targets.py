@@ -123,6 +123,9 @@ class gp_regr:
     def param_constrain(self, X):
         return jnp.exp(X)
     
+    def param_unc_names(self):
+        return ['rho_unc', 'alpha_unc', 'sigma_unc']
+    
 class hmm:
     def __init__(self, data_file):
         with open(data_file, 'r') as f:
@@ -232,7 +235,7 @@ class normal_mixture:
             numpyro.factor("mu_prior", dist.Normal(0., 2.0).log_prob(mu).sum() + mu_unc[1])
 
             sigma_unc = numpyro.sample("sigma_unc", ImproperUniform().expand([2]))
-            sigma = jnp.exp(sigma_unc)
+            sigma = numpyro.deterministic("sigma", jnp.exp(sigma_unc))
             numpyro.factor("sigma_prior", dist.HalfNormal(2).log_prob(sigma).sum() + sigma_unc.sum())
 
             theta_unc = numpyro.sample("theta_unc", ImproperUniform().expand([2]))
