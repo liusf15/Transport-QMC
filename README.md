@@ -14,5 +14,5 @@ See [example.ipynb](experiments/example.ipynb) for an example of using the packa
 
 To reproduce the experiments with posteriordb in the paper, run
 ```
-python -m experiments.posteriordb_simulation --posterior_name arK 
+python -m experiments.posteriordb_simulation --posterior_name hmm
 ```
