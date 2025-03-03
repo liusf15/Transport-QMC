@@ -14,7 +14,7 @@ from transport_qmc.utils import sample_uniform
 
 def run_experiment(posterior_name='arK', nsample=64, num_composition=1, max_deg=3, optimizer='lbfgs', max_iter=50, lr=1., savepath=None):
     # set up target distribution
-    data_file = f"src/stan/{posterior_name}.json"
+    data_file = f"stan/{posterior_name}.json"
     target = getattr(Targets, posterior_name)(data_file)
     d = target.d
 
@@ -33,7 +33,7 @@ def run_experiment(posterior_name='arK', nsample=64, num_composition=1, max_deg=
         log_weights = jnp.nan_to_num(log_weights, nan=-jnp.inf)
         return jnp.exp(2 * jax_logsumexp(log_weights) - jax_logsumexp(2 * log_weights))
     
-    for seed in range(1):
+    for seed in range(5):
         print("Seed:", seed)
         rng = np.random.default_rng(seed)
 

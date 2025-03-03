@@ -2,7 +2,7 @@ result/
 *.so
 stan_models/
 .vscode/
-__pycache__/
+**/__pycache__/** */
 *egg-info/
 build/
 venv*/
