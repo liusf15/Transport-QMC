@@ -5,7 +5,7 @@ A python package for [Transport Quasi-Monte Carlo](https://arxiv.org/abs/2412.16
 Installation
 
 ```
-pip install git+git@github.com:liusf15/Transport-QMC.git
+git clone github.com:liusf15/Transport-QMC.git
 cd Transport-QMC
 pip install -e .
 ```
