@@ -238,7 +238,7 @@ class normal_mixture:
             sigma = numpyro.deterministic("sigma", jnp.exp(sigma_unc))
             numpyro.factor("sigma_prior", dist.HalfNormal(2).log_prob(sigma).sum() + sigma_unc.sum())
 
-            theta_unc = numpyro.sample("theta_unc", ImproperUniform().expand([2]))
+            theta_unc = numpyro.sample("theta_unc", ImproperUniform())
             theta = numpyro.deterministic("theta", jax.nn.sigmoid(theta_unc))  
             numpyro.factor("theta_prior", dist.Beta(5, 5).log_prob(theta) + jnp.sum(jnp.log(theta) + jnp.log(1 - theta)))
 
