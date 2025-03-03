@@ -33,7 +33,7 @@ def run_experiment(posterior_name='arK', nsample=64, num_composition=1, max_deg=
         log_weights = jnp.nan_to_num(log_weights, nan=-jnp.inf)
         return jnp.exp(2 * jax_logsumexp(log_weights) - jax_logsumexp(2 * log_weights))
     
-    for seed in range(5):
+    for seed in range(10):
         print("Seed:", seed)
         rng = np.random.default_rng(seed)
 
@@ -90,7 +90,7 @@ def run_experiment(posterior_name='arK', nsample=64, num_composition=1, max_deg=
                    'moment1': moments_1,
                    'moment2': moments_2}
         os.makedirs(savepath, exist_ok=True)
-        with open(os.path.join(savepath, f'{posterior_name}.pkl'), 'wb') as f:
+        with open(os.path.join(savepath, f'{posterior_name}_comp_{num_composition}.pkl'), 'wb') as f:
             pickle.dump(results, f)
         print('Results saved to', os.path.join(savepath, f'{posterior_name}.pkl'))
 

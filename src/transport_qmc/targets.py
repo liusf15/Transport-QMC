@@ -67,6 +67,9 @@ class arK:
             return X
         X[:, -1] = jnp.exp(X[:, -1])
         return X
+    
+    def param_unc_names(self):
+        return ['alpha', 'beta', 'sigma_unc']
  
 def gp_exp_quad_cov(x, alpha, rho, sigma):
     N = x.shape[0]
@@ -103,6 +106,7 @@ class gp_regr:
             L_cov = jax.scipy.linalg.cholesky(cov, lower=True)
             numpyro.sample("y", dist.MultivariateNormal(jnp.zeros(self.N), scale_tril=L_cov), obs=self.y)
 
+        self.numpyro_model = _numpyro_model
         self._seeded_model = numpyro.handlers.seed(_numpyro_model, jax.random.key(0))
 
     def _log_prob(self, x):
@@ -174,6 +178,9 @@ class hmm:
             return jnp.array([jax.nn.sigmoid(X[0]), jax.nn.sigmoid(X[1]), jnp.exp(X[2]), jnp.exp(X[2]) + jnp.exp(X[3])])
         if X.ndim == 2:
             return jnp.hstack([jax.nn.sigmoid(X[:, 0:1]), jax.nn.sigmoid(X[:, 1:2]), jnp.exp(X[:, 2:3]), jnp.exp(X[:, 2:3]) + jnp.exp(X[:, 3:4])])
+        
+    def param_unc_names(self):
+        return ['theta_unc', 'mu_unc']
     
 class nes_logit:
     def __init__(self, data_file):
@@ -206,6 +213,9 @@ class nes_logit:
 
     def param_constrain(self, X):
         return X
+    
+    def param_unc_names(self):
+        return ['alpha', 'beta']
     
 class normal_mixture:
     def __init__(self, data_file):
@@ -261,6 +271,9 @@ class normal_mixture:
             return jnp.array([X[0], X[0] + jnp.exp(X[1]), jnp.exp(X[2]), jnp.exp(X[3]), jax.nn.sigmoid(X[4])])
         if X.ndim == 2:
             return jnp.hstack([X[:, 0:1], X[:, 0:1] + jnp.exp(X[:, 1:2]), jnp.exp(X[:, 2:3]), jnp.exp(X[:, 3:4]), jax.nn.sigmoid(X[:, 4:5])])
+    
+    def param_unc_names(self):
+        return ['mu_unc', 'sigma_unc', 'theta_unc']
 
 class BananaNormal:
     def __init__(self, d):
