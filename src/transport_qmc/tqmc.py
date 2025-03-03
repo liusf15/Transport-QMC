@@ -8,11 +8,8 @@ from jax.scipy.stats.beta import pdf as beta_pdf
 from jax.nn import softmax, sigmoid
 import jax
 
-from typing import NamedTuple
+from transport_qmc.utils import sample_uniform
 
-Metrics = NamedTuple('Metrics', [('rkl', float), ('fkl', float), ('chisq', float), ('reg_rkl', float), ('ess', float)])
-
-MACHINE_EPSILON = np.finfo(np.float64).eps
 
 def mixture_beta_cdf(x, shapes, weights):
     return jnp.dot(betainc(shapes[:,0], shapes[:, 1], x), softmax(weights))
@@ -165,6 +162,7 @@ class TransportQMC:
         log_p = jax.vmap(self.target.log_prob)(z)
         log_weights = log_p + log_det
         log_weights = jnp.nan_to_num(log_weights, nan=-jnp.inf)
+        log_weights -= jnp.max(log_weights)
         return jnp.exp(2 * logsumexp(log_weights) - logsumexp(2 * log_weights))
 
     def sample(self, params, nsample, seed=0):
@@ -177,6 +175,103 @@ class TransportQMC:
         log_weights = log_p + log_det
         log_weights = jnp.nan_to_num(log_weights, nan=-jnp.inf)
         log_weights -= jnp.max(log_weights)
+        if getattr(self.target, 'param_constrain', None):
+            X = self.target.param_constrain(np.array(X, float))
+        return X, log_weights
+
+
+class TransportQMC_AS(TransportQMC):
+    def __init__(self, d, r, V, target, base_transform='logit', nonlinearity='logit', num_composition=1, max_deg=3):
+        super().__init__(d, target, base_transform, nonlinearity, num_composition, max_deg)
+        self.r = r # number of active dimensions
+        self.V = V # rotation matrix
+    
+    def init_one_layer(self):
+        weights = jnp.zeros((self.r, len(self.shapes)))
+        weights = weights.at[:, 0].set(1.)
+        return {'weights': weights, 'L': jnp.zeros(self.r * (self.r + 1) // 2), 'b': jnp.zeros(self.r)}
+    
+    def init_params(self):
+        weights_ = jnp.zeros((self.d - self.r, len(self.shapes)))
+        weights_ = weights_.at[:, 0].set(1.)
+        params_inactive = {'D': jnp.zeros(self.d - self.r), 'b': jnp.zeros(self.d - self.r), 'weights': weights_} 
+        params_active = [self.init_one_layer() for _ in range(self.num_composition)]
+        return {'active': params_active, 'inactive': params_inactive}
+    
+    def forward_one_layer(self, params, y):
+        weights = params['weights']
+        
+        L_r = jnp.diag(jnp.exp(params['L'][:self.r]))
+        mask = np.tri(self.r, k=-1, dtype=bool)
+        L_r = L_r.at[mask].set(params['L'][self.r:])
+        b = params['b']        
+
+        # linear
+        y = jnp.dot(L_r, y) + b
+        log_det = jnp.sum(params['L'][:self.r])
+
+        # elementwise transform
+        y, log_det_T = self.elementwise(weights, y)
+        log_det += log_det_T
+        return y, log_det
+
+    def forward(self, params, x):
+        log_det = jnp.sum(jnp.log(self.base_transform_grad(x)))
+        x = self.base_transform(x)
+
+        y = x[:self.r]
+        for p in params['active']:
+            y, log_det_ = self.forward_one_layer(p, y)
+            log_det += log_det_
+
+        z = x[self.r:]
+        z = jnp.exp(params['inactive']['D']) * z + params['inactive']['b']   
+        log_det += jnp.sum(params['inactive']['D'])
+        
+        z, log_det_ = self.elementwise(params['inactive']['weights'], z)
+        log_det += log_det_
+
+        x = jnp.concatenate([y, z])
+        return x, log_det
+
+    def forward_from_normal(self, params, x):
+        log_det = 0.
+        y = x[:self.r]
+        for p in params['active']:
+            y, log_det_ = self.forward_one_layer(p, y)
+            log_det += log_det_
+
+        z = x[self.r:]
+        z = jnp.exp(params['inactive']['D']) * z + params['inactive']['b']   
+        log_det += jnp.sum(params['inactive']['D'])
+
+        z, log_det = self.elementwise(params['inactive']['weights'], z)
+        log_det += log_det
+
+        x = jnp.concatenate([y, z])
+        return x, log_det
+
+    def reverse_kl(self, params, u):
+        z, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u) 
+        log_p = jax.vmap(self.target.log_prob)(z @ self.V.T)
+        return jnp.nanmean( - log_det - log_p)
+    
+    def ess(self, params, u):
+        X, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, u)
+        log_p = jax.vmap(self.target.log_prob)(X @ self.V.T)
+        log_weights = log_p + log_det
+        log_weights = jnp.nan_to_num(log_weights, nan=-jnp.inf)
+        log_weights -= jnp.max(log_weights)
+        return jnp.exp(2 * logsumexp(log_weights) - logsumexp(2 * log_weights))
+
+    def sample(self, params, nsample, rng, sampler='rqmc'):
+        X = sample_uniform(nsample, self.d, rng, sampler)
+        X, log_det = jax.vmap(self.forward, in_axes=(None, 0))(params, X)
+        X = X @ self.V.T
+        log_p = jax.vmap(self.target.log_prob)(X)
+        log_weights = log_p + log_det
+        log_weights = jnp.nan_to_num(log_weights, nan=-jnp.inf)
+        log_weights -= np.max(log_weights)
         if getattr(self.target, 'param_constrain', None):
             X = self.target.param_constrain(np.array(X, float))
         return X, log_weights
