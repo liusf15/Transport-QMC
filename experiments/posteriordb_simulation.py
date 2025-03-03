@@ -24,14 +24,7 @@ def run_experiment(posterior_name='arK', nsample=64, num_composition=1, max_deg=
     best_params = params
     max_ess = 0
     get_kl = jax.jit(model.reverse_kl)
-
-    @jax.jit
-    def get_ess(params, U):
-        X, log_det = jax.vmap(model.forward, in_axes=(None, 0))(params, U)
-        log_p = jax.vmap(target.log_prob)(X)
-        log_weights = log_p + log_det
-        log_weights = jnp.nan_to_num(log_weights, nan=-jnp.inf)
-        return jnp.exp(2 * jax_logsumexp(log_weights) - jax_logsumexp(2 * log_weights))
+    get_ess = jax.jit(model.ess)
     
     for seed in range(10):
         print("Seed:", seed)
